@@ -15,7 +15,7 @@ setup(
     version="1.0.0",
     author="Colonees",
     author_email="dev@colonees.io",
-    description="Colonees — The Kubernetes + OS for AI Agents. Open-source, production-grade autonomous agent swarm platform.",
+    description="Colonees — The Autonomous Agent Swarm Platform. Open-source, production-grade autonomous agent swarm platform.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/colonees/colonees",

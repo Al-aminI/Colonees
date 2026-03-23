@@ -87,7 +87,7 @@ async def platform_status_command(args):
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
-        description="Colonees — The Kubernetes + OS for AI Agents",
+        description="Colonees — The Autonomous Agent Swarm Platform",
         epilog="Open-source, production-grade autonomous agent swarm platform."
     )
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])

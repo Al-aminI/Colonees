@@ -1,6 +1,6 @@
 """
 Colonees - Open-source, production-grade autonomous agent swarm platform.
-Hierarchical superagent/specialist architecture — "The Kubernetes + OS for AI Agents".
+Hierarchical superagent/specialist architecture — "The Autonomous Agent Swarm Platform".
 Domain-agnostic orchestration platform where complex workflows emerge from autonomous agent collaboration.
 """
 

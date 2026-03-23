@@ -1,6 +1,6 @@
 # Colonees
 
-**The Kubernetes + OS for AI Agents**
+**The Autonomous Agent Swarm Platform**
 
 Colonees is an open-source, production-grade autonomous agent swarm platform built around a hierarchical superagent/specialist architecture. It represents the same class of agentic infrastructure that powers platforms such as Claude Code, Codex, and Cursor — but designed as a general-purpose, self-hostable enterprise system.
 
@@ -12,7 +12,7 @@ The platform is **domain-agnostic** and can be deployed with specialist agents a
 
 ## Overview
 
-Colonees functions as **"The Kubernetes + Operating System for AI Agents"** — a generic multi-agent orchestration platform where specialist agents collaborate autonomously to research, reason, execute, and deliver on any complex task.
+Colonees is a generic multi-agent orchestration platform where specialist agents collaborate autonomously to research, reason, execute, and deliver on any complex task.
 
 ### Key Features
 
@@ -113,18 +113,50 @@ python app.py
 # Invoke the platform with any goal
 colonees invoke --goal "Research the latest trends in quantum computing and produce a summary report"
 
+# Invoke with a user ID and save output to file
+colonees invoke --goal "Summarise the top 10 open-source LLMs" --user-id alice --output result.json
+
 # Check platform status
 colonees status
+
+# Save status to file
+colonees status --output status.json
 ```
 
 ### API Usage
 
+The platform exposes a REST API. Interactive docs are available at `http://localhost:8080/docs`.
+
 ```bash
-# POST to /invoke
+# Health check
+curl http://localhost:8080/health
+
+# Platform status
+curl http://localhost:8080/status
+
+# Submit a goal to the agent swarm
 curl -X POST http://localhost:8080/invoke \
   -H "Content-Type: application/json" \
-  -d '{"goal": "Analyze the competitive landscape for electric vehicles in 2025"}'
+  -d '{
+    "goal": "Analyze the competitive landscape for electric vehicles in 2025",
+    "user_id": "alice",
+    "context": {}
+  }'
+
+# Invoke a specific specialist agent directly
+curl -X POST http://localhost:8080/agents/invoke \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_type": "researcher",
+    "task": "Find the latest peer-reviewed papers on CRISPR gene editing",
+    "context": {}
+  }'
+
+# List all registered agents
+curl http://localhost:8080/agents
 ```
+
+**Available agent types**: `domain_expert`, `researcher`, `analyst`, `executor`, `media_producer`
 
 ---
 

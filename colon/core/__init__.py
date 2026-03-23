@@ -1,6 +1,6 @@
 """
 Colonees Core Platform Components
-Agent swarm core components — The Kubernetes + OS for AI Agents
+Agent swarm core components — The Autonomous Agent Swarm Platform
 """
 
 from .platform import ColoneesPlatform

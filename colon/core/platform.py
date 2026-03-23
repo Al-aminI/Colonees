@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 class ColoneesPlatform:
     """
-    Main Colonees platform class — The Kubernetes + OS for AI Agents.
+    Main Colonees platform class — The Autonomous Agent Swarm Platform.
     Coordinates a superagent with an extensible colony of domain-specialist agents.
     Domain-agnostic: deployable across any vertical.
     """
