@@ -1,0 +1,66 @@
+# Colonees — Autonomous Agent Swarm Platform Requirements
+# Strands Agent Framework
+
+# Core Strands Framework
+strands-agents
+
+# Model Providers
+openai  # For OpenAI-compatible APIs (Groq, Fireworks, etc.)
+anthropic  # Alternative model provider
+google-generativeai  # Alternative model provider
+langchain
+langchain-google-genai
+
+# Additional Strands Tools
+strands-agents-tools
+
+# MCP Support
+mcp
+
+# Async and Concurrency
+aiohttp
+
+# Data Processing
+pandas
+numpy
+pydantic
+PyYAML  # For YAML configuration parsing
+
+# Web Framework
+fastapi
+uvicorn[standard]
+
+# HTTP Client
+httpx
+
+# Logging and Monitoring
+structlog
+prometheus-client
+
+# Testing
+pytest
+pytest-asyncio
+pytest-mock
+hypothesis
+
+# Development Tools
+black
+isort
+mypy
+pre-commit
+python-dotenv  # For loading .env files
+
+# Documentation
+sphinx
+sphinx-rtd-theme
+
+# Optional: OpenTelemetry for observability
+opentelemetry-sdk
+opentelemetry-api
+
+# Optional: Playwright for browser automation
+playwright
+nest-asyncio
+
+# Optional: JWT support for authentication
+pyjwt
