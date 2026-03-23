@@ -60,7 +60,14 @@ async def get_platform() -> ColoneesPlatform:
 
 class InvokeRequest(BaseModel):
     goal: str = Field(..., description="The goal or task for the agent swarm to accomplish.")
-    user_id: str = Field("anonymous", description="Optional user identifier for session tracking.")
+    session_id: Optional[str] = Field(
+        None,
+        description=(
+            "Session ID to group this request with previous ones for conversation history. "
+            "If omitted, a new session key is generated automatically. "
+            "Pass the same session_id across requests to maintain history continuity."
+        ),
+    )
     context: Dict[str, Any] = Field(default_factory=dict, description="Optional additional context.")
     colonees: Optional[list] = Field(
         None,
@@ -234,7 +241,7 @@ async def invoke(body: InvokeRequest):
         platform = await get_platform()
         result = await platform.handle_request(
             user_goal=body.goal,
-            context={"user_id": body.user_id, "colonees": body.colonees, **body.context},
+            context={"session_id": body.session_id, "colonees": body.colonees, **body.context},
         )
         return InvokeResponse(status="success", result=_serialize(result))
     except Exception as e:
@@ -261,6 +268,42 @@ async def invoke_agent(body: AgentRequest):
         logger.error("Agent invoke failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/history/{session_id}", tags=["Agent Swarm"])
+async def get_history(session_id: str, limit: Optional[int] = None):
+    """
+    Retrieve conversation history for a session.
+
+    Returns all stored turns (user goals + assistant responses) ordered oldest-first.
+    Pass `limit` to cap the number of entries returned.
+    """
+    try:
+        platform = await get_platform()
+        history = await platform.memory_manager.get_history(session_id, limit=limit)
+        return {"session_id": session_id, "history": history, "count": len(history)}
+    except Exception as e:
+        logger.error("Get history failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/history/{session_id}", tags=["Agent Swarm"])
+async def clear_history(session_id: str):
+    """Clear all conversation history for a session (human-readable turns + Strands messages)."""
+    try:
+        platform = await get_platform()
+        # Clear human-readable history
+        await platform.memory_manager.clear(session_id)
+        # Also clear the Strands-level messages and state for this session
+        from colon.memory.strands_session import ColoneesStrandsSessionManager
+        strands_session = ColoneesStrandsSessionManager(
+            session_id=session_id,
+            backend=platform.memory_manager.backend,
+        )
+        await strands_session.clear()
+        return {"status": "cleared", "session_id": session_id}
+    except Exception as e:
+        logger.error("Clear history failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/agents", tags=["Agent Swarm"])
 async def list_agents():

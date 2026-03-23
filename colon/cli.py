@@ -6,23 +6,19 @@ import asyncio
 import argparse
 import json
 import logging
-from typing import Dict, Any
 
 from .core import ColoneesPlatform
 
 
 def setup_logging(level: str = "INFO"):
-    """Setup logging configuration"""
     logging.basicConfig(
         level=getattr(logging, level.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
 
 async def invoke_command(args):
-    """Invoke the platform with a goal"""
     platform = ColoneesPlatform()
-
     try:
         print("Initializing Colonees Platform...")
         await platform.initialize()
@@ -30,17 +26,17 @@ async def invoke_command(args):
         print(f"Processing goal: {args.goal}")
         result = await platform.handle_request(
             user_goal=args.goal,
-            context={'user_id': args.user_id or 'cli_user'}
+            context={},
         )
 
         print(f"Status: {result['status']}")
         print(f"Response: {result['response']}")
 
-        if result.get('final_asset'):
+        if result.get("final_asset"):
             print(f"Asset: {result['final_asset']}")
 
         if args.output:
-            with open(args.output, 'w') as f:
+            with open(args.output, "w") as f:
                 json.dump(result, f, indent=2)
             print(f"Results saved to: {args.output}")
 
@@ -49,14 +45,11 @@ async def invoke_command(args):
         return 1
     finally:
         await platform.shutdown()
-
     return 0
 
 
-async def platform_status_command(args):
-    """Get platform status command"""
+async def status_command(args):
     platform = ColoneesPlatform()
-
     try:
         print("Initializing Colonees Platform...")
         await platform.initialize()
@@ -64,54 +57,49 @@ async def platform_status_command(args):
         status = await platform.get_platform_status()
 
         print("Colonees Platform Status:")
-        print(f"  Initialized: {status['platform_initialized']}")
-        print(f"  Active Sessions: {status['active_sessions']}")
-        print(f"  Total Sessions Created: {status['metrics']['total_sessions_created']}")
-        print(f"  Active Users: {status['metrics']['active_users']}")
-        print(f"  Max Concurrent Users: {status['config_summary']['max_concurrent_users']}")
+        print(f"  Initialized:      {status['platform_initialized']}")
+        print(f"  Active requests:  {status['active_sessions']}")
+        print(f"  Total requests:   {status['metrics']['total_requests_handled']}")
+        print(f"  Environment:      {status['config_summary']['environment']}")
 
         if args.output:
-            with open(args.output, 'w') as f:
+            with open(args.output, "w") as f:
                 json.dump(status, f, indent=2)
             print(f"Status saved to: {args.output}")
 
     except Exception as e:
-        print(f"Error getting platform status: {e}")
+        print(f"Error: {e}")
         return 1
     finally:
         await platform.shutdown()
-
     return 0
 
 
 def main():
-    """Main CLI entry point"""
     parser = argparse.ArgumentParser(
         description="Colonees — The Autonomous Agent Swarm Platform",
-        epilog="Open-source, production-grade autonomous agent swarm platform."
     )
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
 
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    subparsers = parser.add_subparsers(dest="command")
 
-    # Invoke command
-    invoke_parser = subparsers.add_parser("invoke", help="Invoke the platform with a goal")
+    invoke_parser = subparsers.add_parser("invoke", help="Submit a goal to the agent swarm")
     invoke_parser.add_argument("--goal", required=True, help="The goal or task to accomplish")
-    invoke_parser.add_argument("--user-id", help="User identifier")
-    invoke_parser.add_argument("--output", help="Output file for results")
+    invoke_parser.add_argument("--output", help="Write JSON result to this file")
 
-    # Platform status command
     status_parser = subparsers.add_parser("status", help="Get platform status")
-    status_parser.add_argument("--output", help="Output file for status")
+    status_parser.add_argument("--output", help="Write JSON status to this file")
 
     args = parser.parse_args()
-
     setup_logging(args.log_level)
 
     if args.command == "invoke":
         return asyncio.run(invoke_command(args))
     elif args.command == "status":
-        return asyncio.run(platform_status_command(args))
+        return asyncio.run(status_command(args))
     else:
         parser.print_help()
         return 1

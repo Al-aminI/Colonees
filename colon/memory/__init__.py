@@ -1,8 +1,16 @@
 """
-Colonees Memory Management
-Memory management for the agent swarm platform
+Colonees Memory & Session Management
 """
 
-from .memory_manager import CologeesMemoryManager
+from .memory_manager import CologeesMemoryManager, MemoryBackend, InProcessMemoryBackend
+from .strands_session import ColoneesStrandsSessionManager
+from .session_manager import CologeesSessionManager, SessionContext
 
-__all__ = ['CologeesMemoryManager']
+__all__ = [
+    "CologeesMemoryManager",
+    "MemoryBackend",
+    "InProcessMemoryBackend",
+    "ColoneesStrandsSessionManager",
+    "CologeesSessionManager",
+    "SessionContext",
+]

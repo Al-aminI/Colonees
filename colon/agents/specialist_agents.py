@@ -101,11 +101,11 @@ class SpecialistAgentFactory:
         if not agent_id:
             agent_id = f"{specialist_type}_{specialization}_specialist_{hash(str(session_manager))}"
 
-        # 1. Try ColoneeRegistry first (user-defined + built-in definitions)
+        # 1. Try ColoneeRegistry (user-defined + built-in definitions)
         if colonee_registry is not None:
             defn = colonee_registry.get(specialist_type)
             if defn is None:
-                # Also try the legacy type map
+                # Map legacy type aliases to current names
                 _legacy_map = {
                     'tutor': 'executor',
                     'subject_expert': 'domain_expert',
@@ -130,39 +130,14 @@ class SpecialistAgentFactory:
                     mcp_manager=mcp_manager,
                 )
 
-        # 2. Fallback: legacy hardcoded classes
-        from colon.agents.specialists.tutoring import TutorSpecialistAgent
-        from colon.agents.specialists.subject_expertise import SubjectExpertSpecialistAgent
-        from colon.agents.specialists.research import ResearchSpecialistAgent
-        from colon.agents.specialists.assessment import AssessmentSpecialistAgent
-        from colon.agents.specialists.video_production import VideoProductionSpecialistAgent
-
-        _legacy_classes = {
-            'tutor': TutorSpecialistAgent,
-            'subject_expert': SubjectExpertSpecialistAgent,
-            'research': ResearchSpecialistAgent,
-            'assessment': AssessmentSpecialistAgent,
-            'video_production': VideoProductionSpecialistAgent,
-        }
-
-        if specialist_type not in _legacy_classes:
-            raise ValueError(
-                f"Unknown specialist type: '{specialist_type}'. "
-                f"Available: {list(_legacy_classes.keys())} or any name in the ColoneeRegistry."
-            )
-
-        agent_class = _legacy_classes[specialist_type]
-        return agent_class(session_manager, agent_id, specialization, agent_manager, mcp_manager)
+        raise ValueError(
+            f"Unknown specialist type: '{specialist_type}'. "
+            f"Register it via the ColoneeRegistry (POST /colonees) or use a built-in: "
+            f"researcher, domain_expert, analyst, executor, media_producer."
+        )
 
     @staticmethod
     def get_available_specialist_types(colonee_registry=None) -> List[str]:
-        legacy = ['tutor', 'subject_expert', 'research', 'assessment', 'video_production']
         if colonee_registry is not None:
-            registry_names = [c.name for c in colonee_registry.list()]
-            # Merge, preserving order, deduplicating
-            seen = set(legacy)
-            for name in registry_names:
-                if name not in seen:
-                    legacy.append(name)
-                    seen.add(name)
-        return legacy
+            return [c.name for c in colonee_registry.list()]
+        return ["researcher", "domain_expert", "analyst", "executor", "media_producer"]

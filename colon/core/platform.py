@@ -5,20 +5,15 @@ Main platform class that orchestrates the agent swarm
 
 import asyncio
 import logging
-import os
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from datetime import datetime
-
-from strands import Agent
 
 from .config import CologeesConfig, get_config
 from .workflow_orchestrator import ColoneesSupervisorAgent
-from .safety_enforcer import SafetyEnforcer
 from .resource_manager import CologeesResourceManager
 from ..agents.agent_manager import CologeesAgentManager
 from ..agents.agent_directory import AgentDirectory
-from ..session import CologeesSessionManager
-from ..memory import CologeesMemoryManager
+from ..memory import CologeesMemoryManager, ColoneesStrandsSessionManager, CologeesSessionManager
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +35,6 @@ class ColoneesPlatform:
         self.memory_manager: Optional[CologeesMemoryManager] = None
         self.agent_manager: Optional[CologeesAgentManager] = None
         self.agent_directory: Optional[AgentDirectory] = None
-        self.safety_enforcer: Optional[SafetyEnforcer] = None
         self.resource_manager: Optional[CologeesResourceManager] = None
         self.supervisor_agent: Optional[ColoneesSupervisorAgent] = None
 
@@ -49,7 +43,6 @@ class ColoneesPlatform:
         self.active_sessions: Dict[str, Any] = {}
         self.platform_metrics = {
             'total_sessions_created': 0,
-            'active_users': 0,
             'total_agents_spawned': 0,
             'total_requests_handled': 0,
             'platform_start_time': None
@@ -87,39 +80,35 @@ class ColoneesPlatform:
             logger.info("Agent Directory initialized")
 
             self.agent_manager = CologeesAgentManager(
-                session_manager=self.session_manager,
                 memory_manager=self.memory_manager,
                 agent_directory=self.agent_directory,
                 config=self.config
             )
             logger.info("Agent Manager initialized")
 
-            self.safety_enforcer = SafetyEnforcer()
-            logger.info("Safety Enforcer initialized")
-
             self.resource_manager = CologeesResourceManager(config=self.config)
             logger.info("Resource Manager initialized")
 
-            supervisor_user_id = "system_supervisor"
-            logger.info("Memory disabled: Skipping supervisor memory creation")
-
-            supervisor_session_data = await self.session_manager.create_session(
-                user_id=supervisor_user_id,
+            supervisor_session_id, _ = await self.session_manager.create_session(
                 context={
-                    'agent_type': 'supervisor',
-                    'specialization': 'generic_orchestration',
-                    'system_agent': True
+                    "agent_type": "supervisor",
+                    "specialization": "generic_orchestration",
+                    "system_agent": True,
                 }
             )
 
-            supervisor_session_manager = supervisor_session_data[1]['memory_session_manager']
+            # Give the supervisor a Strands-native session manager so its
+            # conversation history persists across requests.
+            supervisor_strands_session = ColoneesStrandsSessionManager(
+                session_id=supervisor_session_id,
+                backend=self.memory_manager.backend,
+            )
 
             self.supervisor_agent = ColoneesSupervisorAgent(
-                session_manager=supervisor_session_manager,
+                session_manager=supervisor_strands_session,
                 agent_directory=self.agent_directory,
-                safety_enforcer=self.safety_enforcer,
                 agent_manager=self.agent_manager,
-                platform_session_manager=self.session_manager
+                platform_session_manager=self.session_manager,
             )
             logger.info("Supervisor Agent initialized")
 
@@ -134,26 +123,9 @@ class ColoneesPlatform:
         try:
             if not self.agent_directory:
                 self.agent_directory = AgentDirectory()
-            if not self.safety_enforcer:
-                self.safety_enforcer = SafetyEnforcer()
         except Exception as fallback_error:
             logger.critical(f"Fallback initialization also failed: {fallback_error}")
             raise
-
-    async def create_session(self, user_id: str, context: Dict[str, Any]) -> str:
-        """Create new session"""
-        if not self.is_initialized:
-            raise RuntimeError("Platform not initialized. Call initialize() first.")
-
-        session_id, session_data = await self.session_manager.create_session(
-            user_id=user_id,
-            context=context
-        )
-
-        self.active_sessions[session_id] = session_data
-        self.platform_metrics['total_sessions_created'] += 1
-        logger.info(f"Session created: {session_id} for user: {user_id}")
-        return session_id
 
     async def handle_request(self, user_goal: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -163,7 +135,22 @@ class ColoneesPlatform:
         if not self.is_initialized:
             raise RuntimeError("Platform not initialized. Call initialize() first.")
 
+        # Track this request as an active session so status reflects real load
+        request_key = f"request_{datetime.now().strftime('%Y%m%d%H%M%S_%f')}"
+        self.active_sessions[request_key] = {'started_at': datetime.now(), 'goal': user_goal}
+
+        # Resolve session_id for memory storage — caller may pass one in context
+        session_id: Optional[str] = context.get("session_id") or request_key
+
         try:
+            # Store the incoming request in conversation history
+            await self.memory_manager.store(
+                session_id=session_id,
+                role="user",
+                content=user_goal,
+                metadata={"context": {k: v for k, v in context.items() if k != "session_id"}},
+            )
+
             result = await self.supervisor_agent.handle_request(user_goal, context)
             self.platform_metrics['total_requests_handled'] = self.platform_metrics.get('total_requests_handled', 0) + 1
 
@@ -178,14 +165,25 @@ class ColoneesPlatform:
             else:
                 response_text = "Request processed."
 
+            # Store the assistant response
+            await self.memory_manager.store(
+                session_id=session_id,
+                role="assistant",
+                content=response_text,
+                metadata={
+                    "task_id": result.get("task_id"),
+                    "status": result.get("status", "completed"),
+                    "final_asset": result.get("final_asset"),
+                },
+            )
+
             return {
                 'status': result.get('status', 'completed'),
                 'response': response_text,
                 'final_asset': result.get('final_asset'),
                 'agents_used': result.get('execution_trace', []),
-                'execution_time': 0,
-                'session_id': context.get('session_id'),
                 'task_id': result.get('task_id'),
+                'session_id': session_id,
                 'user_goal': user_goal,
                 'metadata': {
                     'platform': 'Colonees',
@@ -196,12 +194,22 @@ class ColoneesPlatform:
 
         except Exception as e:
             logger.error(f"Failed to handle request: {e}")
+            await self.memory_manager.store(
+                session_id=session_id,
+                role="error",
+                content=str(e),
+                metadata={"user_goal": user_goal},
+            )
             return {
                 'status': 'failed',
                 'error': str(e),
                 'response': f"Error processing request: {str(e)}",
+                'session_id': session_id,
                 'user_goal': user_goal
             }
+
+        finally:
+            self.active_sessions.pop(request_key, None)
 
     async def get_platform_status(self) -> Dict[str, Any]:
         """Get current platform status and metrics"""
@@ -209,15 +217,20 @@ class ColoneesPlatform:
         if self.resource_manager:
             resource_stats = self.resource_manager.get_resource_stats()
 
+        memory_stats = {}
+        if self.memory_manager:
+            memory_stats = self.memory_manager.get_stats()
+
         return {
             'platform_initialized': self.is_initialized,
             'active_sessions': len(self.active_sessions),
             'metrics': self.platform_metrics.copy(),
             'resource_stats': resource_stats,
+            'memory_stats': memory_stats,
             'config_summary': {
                 'max_concurrent_users': self.config.max_concurrent_users,
                 'max_active_sessions': self.config.max_active_sessions,
-                'memory_region': self.config.runtime.memory_region
+                'environment': self.config.environment,
             }
         }
 
@@ -228,12 +241,10 @@ class ColoneesPlatform:
         if self.resource_manager:
             await self.resource_manager.stop_monitoring()
 
-        for session_id in list(self.active_sessions.keys()):
-            try:
-                await self.session_manager.cleanup_session(session_id)
-            except Exception as e:
-                logger.error(f"Error cleaning up session {session_id}: {e}")
+        if self.session_manager:
+            await self.session_manager.shutdown()
 
+        self.active_sessions.clear()
         self.is_initialized = False
         logger.info("Colonees Platform shutdown complete")
 

@@ -6,14 +6,12 @@ Generic task orchestration without domain-specific workflows
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import dataclass
 
 from strands import Agent, tool
-from strands_tools import file_read, file_write
 
-from ..agents.agent_directory import AgentDirectory, AgentStatus
-from .safety_enforcer import SafetyEnforcer
+from ..agents.agent_directory import AgentDirectory
 from .model_config import get_model
 
 
@@ -50,13 +48,11 @@ class ColoneesSupervisorAgent:
         self,
         session_manager,
         agent_directory: AgentDirectory,
-        safety_enforcer: SafetyEnforcer,
         agent_manager: Optional[Any] = None,
-        platform_session_manager: Optional[Any] = None
+        platform_session_manager: Optional[Any] = None,
     ):
         self.session_manager = session_manager
         self.agent_directory = agent_directory
-        self.safety_enforcer = safety_enforcer
         self.agent_manager = agent_manager
         self.platform_session_manager = platform_session_manager
         self.active_executions: Dict[str, TaskExecution] = {}
@@ -70,6 +66,7 @@ class ColoneesSupervisorAgent:
 
         self.agent = Agent(
             name="colonees_superagent",
+            agent_id="colonees_superagent",
             system_prompt=self._get_supervisor_system_prompt(),
             model=get_model(),
             session_manager=session_manager,
@@ -250,6 +247,18 @@ If there is no final asset, set final_asset.type to "none" and omit url/format.
 
         finally:
             if task_id in self.active_executions:
+                # Clean up any specialist sessions spawned during this task
+                if self.platform_session_manager:
+                    spawned_sessions = [
+                        step.get('session_id')
+                        for step in self.active_executions[task_id].trace
+                        if step.get('step') == 'agent_spawned' and step.get('session_id')
+                    ]
+                    for sid in spawned_sessions:
+                        try:
+                            await self.platform_session_manager.cleanup_session(sid)
+                        except Exception as cleanup_err:
+                            logger.warning(f"Failed to cleanup specialist session {sid}: {cleanup_err}")
                 del self.active_executions[task_id]
 
     def _extract_final_asset(self, result: Any) -> Optional[Dict[str, Any]]:
@@ -320,9 +329,6 @@ If there is no final asset, set final_asset.type to "none" and omit url/format.
         if context is None:
             context = {}
 
-        if not self.safety_enforcer.check_goal_safety(user_goal):
-            raise ValueError(f"Goal violates safety policies: {user_goal}")
-
         capabilities = await self._extract_capabilities_from_analysis(user_goal)
 
         return {
@@ -371,16 +377,14 @@ If there is no final asset, set final_asset.type to "none" and omit url/format.
         self,
         agent_type: str,
         specialization: str,
-        user_id: str = "anonymous",
         capabilities_needed: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Spawn a new specialist agent.
 
         Args:
-            agent_type: Type of specialist agent (domain_expert, researcher, analyst, executor, media_producer, tutor, subject_expert, research, assessment, video_production)
+            agent_type: Type of specialist agent (domain_expert, researcher, analyst, executor, media_producer)
             specialization: Specific domain or focus area for the agent
-            user_id: User identifier for session management
             capabilities_needed: Optional list of required capabilities
 
         Returns:
@@ -401,17 +405,14 @@ If there is no final asset, set final_asset.type to "none" and omit url/format.
 
             valid_specialist_types = [
                 'domain_expert', 'researcher', 'analyst', 'executor', 'media_producer',
-                # legacy aliases
-                'tutor', 'subject_expert', 'research', 'assessment', 'video_production'
             ]
-            # Also include any user-defined colonees from the registry
             if self.agent_manager and hasattr(self.agent_manager, 'colonee_registry'):
                 registry_names = [
                     c.name for c in self.agent_manager.colonee_registry.list(enabled_only=True)
                 ]
                 valid_specialist_types = list(set(valid_specialist_types + registry_names))
 
-            # Enforce per-request colonee allowlist if set
+            # Enforce per-request colonee allowlist
             for execution in self.active_executions.values():
                 allowlist = execution.safety_metrics.get('colonee_allowlist')
                 if allowlist is not None:
@@ -425,17 +426,13 @@ If there is no final asset, set final_asset.type to "none" and omit url/format.
                     'agent_type': agent_type
                 }
 
-            learning_context = {
-                'agent_type': agent_type,
-                'specialization': specialization,
-                'capabilities_needed': capabilities_needed or [],
-                'spawned_by': 'superagent',
-                'user_id': user_id
-            }
-
             session_result = await self.platform_session_manager.create_session(
-                user_id=user_id,
-                context=learning_context
+                context={
+                    'agent_type': agent_type,
+                    'specialization': specialization,
+                    'capabilities_needed': capabilities_needed or [],
+                    'spawned_by': 'superagent',
+                }
             )
 
             if isinstance(session_result, tuple):
@@ -693,12 +690,6 @@ Complete this task using your tools autonomously.
             'analyst': ['assessment_design', 'data_analysis', 'progress_evaluation', 'feedback_strategy'],
             'executor': ['file_operations', 'code_execution', 'computation', 'task_automation'],
             'media_producer': ['image_generation', 'video_production', 'audio_synthesis', 'content_creation'],
-            # legacy aliases
-            'tutor': ['personalized_instruction', 'learning_path_design', 'pedagogical_analysis'],
-            'subject_expert': ['domain_knowledge_provision', 'concept_explanation', 'problem_analysis'],
-            'research': ['research_strategy_design', 'information_synthesis', 'source_validation'],
-            'assessment': ['assessment_design', 'learning_analytics', 'progress_evaluation'],
-            'video_production': ['video_creation', 'video_planning', 'asset_coordination'],
         }
 
         # Check registry for user-defined colonees

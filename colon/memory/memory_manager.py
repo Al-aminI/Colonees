@@ -1,129 +1,152 @@
 """
 Colonees Memory Manager
-Memory management for the agent swarm platform
+
+Provides conversation history storage for agent sessions.
+
+Default backend: in-process dict (no persistence across restarts).
+Pluggable: pass a `backend` implementing the MemoryBackend protocol
+to swap in Redis, DynamoDB, Postgres, etc.
+
+Strands handles within-turn LLM conversation state via its own
+session_manager. This manager handles cross-request / cross-session
+history that YOU want to persist and query.
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional, List
+from abc import ABC, abstractmethod
 from datetime import datetime
-from dataclasses import dataclass
-
-from strands import Agent
+from typing import Any, Dict, List, Optional
 
 from ..core.config import CologeesConfig
-from ..core.model_config import get_model
-
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class WorkflowEvent:
-    """Workflow event data structure"""
-    event_id: str
-    user_id: str
-    session_id: str
-    event_type: str
-    content: Dict[str, Any]
-    timestamp: datetime
-    agents_involved: List[str]
-    outcome: Optional[str] = None
+# ---------------------------------------------------------------------------
+# Backend protocol
+# ---------------------------------------------------------------------------
 
+class MemoryBackend(ABC):
+    """
+    Implement this to plug in a persistent memory store.
+
+    Example implementations: Redis, DynamoDB, Postgres, SQLite.
+    """
+
+    @abstractmethod
+    async def append(self, session_id: str, entry: Dict[str, Any]) -> None:
+        """Append a history entry for the session."""
+
+    @abstractmethod
+    async def get(self, session_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Return history entries for the session, newest-last."""
+
+    @abstractmethod
+    async def delete(self, session_id: str) -> None:
+        """Delete all history for the session."""
+
+
+# ---------------------------------------------------------------------------
+# Default in-process backend
+# ---------------------------------------------------------------------------
+
+class InProcessMemoryBackend(MemoryBackend):
+    """
+    Simple in-memory store. Fast, zero dependencies.
+    Data is lost on restart — swap for a persistent backend in production.
+    """
+
+    def __init__(self, max_entries_per_session: int = 1000):
+        self._store: Dict[str, List[Dict[str, Any]]] = {}
+        self._max = max_entries_per_session
+
+    async def append(self, session_id: str, entry: Dict[str, Any]) -> None:
+        bucket = self._store.setdefault(session_id, [])
+        bucket.append(entry)
+        if len(bucket) > self._max:
+            bucket.pop(0)
+
+    async def get(self, session_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        bucket = self._store.get(session_id, [])
+        return bucket[-limit:] if limit else list(bucket)
+
+    async def delete(self, session_id: str) -> None:
+        self._store.pop(session_id, None)
+
+    def total_sessions(self) -> int:
+        return len(self._store)
+
+
+# ---------------------------------------------------------------------------
+# Manager
+# ---------------------------------------------------------------------------
 
 class CologeesMemoryManager:
     """
     Memory manager for Colonees platform.
-    Handles context and state management for agent workflows.
+
+    Stores and retrieves conversation/event history per session.
+    Uses InProcessMemoryBackend by default; swap via the `backend` param.
     """
 
     def __init__(
         self,
         config: CologeesConfig,
-        memory_client=None,
-        region_name: Optional[str] = None
+        backend: Optional[MemoryBackend] = None,
     ):
-        self.memory = memory_client  # Optional external memory backend
-        self.region_name = region_name
         self.config = config
-        self.user_memories: Dict[str, str] = {}
+        self.backend: MemoryBackend = backend or InProcessMemoryBackend()
+        logger.info(
+            "Memory Manager initialized (backend: %s)",
+            type(self.backend).__name__,
+        )
 
-        logger.info("Colonees Memory Manager initialized")
-
-    async def create_user_memory(self, user_id: str) -> str:
-        """Get or create memory context for a user"""
-        if not self.memory:
-            logger.info(f"No memory backend: Using in-process memory for user {user_id}")
-            return f"local_memory_{user_id}"
-
-        if user_id in self.user_memories:
-            return self.user_memories[user_id]
-
-        memory_id = f"user_{user_id}_memory"
-        self.user_memories[user_id] = memory_id
-        logger.info(f"Memory context created for user: {user_id}")
-        return memory_id
-
-    def create_session_manager(self, user_id: str, session_id: str):
-        """Create session manager (returns None when no memory backend)"""
-        if not self.memory:
-            logger.info(f"No memory backend: No session manager for user {user_id}")
-            return None
-
-        memory_id = self.user_memories.get(user_id)
-        if not memory_id:
-            raise ValueError(f"No memory found for user {user_id}. Create user memory first.")
-
-        return None  # Pluggable — implement with your memory backend
-
-    async def store_workflow_event(
+    async def store(
         self,
-        user_id: str,
         session_id: str,
-        event: WorkflowEvent
-    ) -> bool:
-        """Store workflow event"""
-        if not self.memory:
-            logger.info(f"No memory backend: Skipping event storage for user {user_id}")
-            return True
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Store a conversation turn or event for a session.
 
-        try:
-            logger.debug(f"Workflow event stored: {event.event_id} for user: {user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to store workflow event {event.event_id}: {e}")
-            return False
-
-    async def retrieve_context(
-        self,
-        user_id: str,
-        session_id: str,
-        query: str,
-        limit: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
-        """Query context history"""
-        if not self.memory:
-            return []
-
-        try:
-            return []
-        except Exception as e:
-            logger.error(f"Failed to retrieve context for user {user_id}: {e}")
-            return []
-
-    async def get_user_profile(self, user_id: str) -> Dict[str, Any]:
-        """Get user profile"""
-        if not self.memory:
-            return {'user_id': user_id, 'memory_available': False}
-
-        return {'user_id': user_id, 'memory_available': True}
-
-    def get_memory_stats(self) -> Dict[str, Any]:
-        """Get memory management statistics"""
-        return {
-            'total_user_memories': len(self.user_memories),
-            'memory_region': self.region_name,
-            'retrieval_threshold': self.config.strands.memory_retrieval_threshold,
-            'max_results': self.config.strands.max_memory_results,
+        Args:
+            session_id: The session this entry belongs to.
+            role: 'user', 'assistant', 'tool', or any custom label.
+            content: The text content of the entry.
+            metadata: Optional extra data (agent_id, tool_name, etc.).
+        """
+        entry = {
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            **(metadata or {}),
         }
+        await self.backend.append(session_id, entry)
 
+    async def get_history(
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve conversation history for a session.
+
+        Args:
+            session_id: The session to query.
+            limit: Max number of entries to return (newest last).
+        """
+        return await self.backend.get(session_id, limit=limit)
+
+    async def clear(self, session_id: str) -> None:
+        """Delete all history for a session."""
+        await self.backend.delete(session_id)
+
+    def get_stats(self) -> Dict[str, Any]:
+        backend_name = type(self.backend).__name__
+        extra = {}
+        if isinstance(self.backend, InProcessMemoryBackend):
+            extra["total_sessions_with_history"] = self.backend.total_sessions()
+        return {"backend": backend_name, **extra}

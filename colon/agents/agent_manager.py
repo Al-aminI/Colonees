@@ -7,11 +7,8 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from strands import Agent
-
 from ..core.config import CologeesConfig
-from ..session import CologeesSessionManager
-from ..memory import CologeesMemoryManager
+from ..memory import CologeesMemoryManager, ColoneesStrandsSessionManager
 from ..communication.mcp_manager import MCPManager
 from .colonee_registry import ColoneeRegistry
 
@@ -37,15 +34,11 @@ class CologeesAgentManager:
 
     def __init__(
         self,
-        session_manager: CologeesSessionManager,
         memory_manager: CologeesMemoryManager,
         agent_directory: 'AgentDirectory',
         config: CologeesConfig,
-        gateway_client=None
     ):
-        self.session_manager = session_manager
         self.memory_manager = memory_manager
-        self.gateway = gateway_client  # kept for backward compat, unused
         self.agent_directory = agent_directory
         self.config = config
         self.mcp = MCPManager()
@@ -86,7 +79,6 @@ class CologeesAgentManager:
         }
 
         self.specialist_capabilities = {
-            # New domain-agnostic names
             'domain_knowledge_provision': 'domain_expert',
             'concept_explanation': 'domain_expert',
             'problem_analysis': 'domain_expert',
@@ -107,14 +99,6 @@ class CologeesAgentManager:
             'video_creation': 'media_producer',
             'video_planning': 'media_producer',
             'asset_coordination': 'media_producer',
-            # Legacy aliases (map to new types)
-            'personalized_instruction': 'domain_expert',
-            'learning_path_design': 'domain_expert',
-            'pedagogical_analysis': 'domain_expert',
-            'student_assessment': 'analyst',
-            'instructional_strategy': 'domain_expert',
-            'learning_analytics': 'analyst',
-            'video_production_orchestration': 'media_producer',
             'creative_direction': 'media_producer',
         }
 
@@ -142,19 +126,18 @@ class CologeesAgentManager:
         session_id: str,
         agent_id: Optional[str] = None
     ) -> Any:
-        """Create a Specialist Agent"""
+        """Create a Specialist Agent with its own Strands session manager."""
+        # Each specialist gets a session-scoped Strands session manager so its
+        # conversation history is persisted and restored via the memory backend.
+        strands_session = ColoneesStrandsSessionManager(
+            session_id=session_id,
+            backend=self.memory_manager.backend,
+        )
 
-        specialist_session_manager = self.session_manager.get_session_manager(session_id)
-
-        if specialist_session_manager is None:
-            logger.info(f"Creating specialist agent without session manager")
-
-        # Pass the original specialist_type directly — the factory resolves it
-        # via ColoneeRegistry first, then falls back to legacy class map.
         specialist_agent = self.specialist_factory.create_specialist_agent(
             specialist_type=specialist_type,
             specialization=specialization,
-            session_manager=specialist_session_manager,
+            session_manager=strands_session,
             agent_id=agent_id,
             agent_manager=self,
             agent_directory=self.agent_directory,
@@ -224,8 +207,7 @@ class CologeesAgentManager:
 
     def get_agent_capabilities(self, agent_type: str) -> Dict[str, Any]:
         """Get capabilities for specific agent type"""
-        if agent_type in ['domain_expert', 'researcher', 'analyst', 'executor', 'media_producer',
-                          'tutor', 'subject_expert', 'research', 'assessment']:
+        if agent_type in ['domain_expert', 'researcher', 'analyst', 'executor', 'media_producer']:
             return {'type': 'specialist', 'agent_type': agent_type}
         elif agent_type in ['file', 'computation', 'research_tools', 'media']:
             return {'type': 'tool', 'agent_type': agent_type}
@@ -271,7 +253,7 @@ class CologeesAgentManager:
                 endpoint=f"local://specialist/{agent.agent_id}",
                 framework="strands",
                 tools=[],
-                memory_enabled=False,
+                memory_enabled=True,
                 a2a_enabled=True,
                 load=0.0,
                 last_heartbeat=datetime.now(),

@@ -114,6 +114,7 @@ class DynamicSpecialistAgent(BaseSpecialistAgent):
 
         return Agent(
             name=self.agent_id,
+            agent_id=self.agent_id,
             system_prompt=system_prompt,
             model=get_model(),
             session_manager=self.session_manager,

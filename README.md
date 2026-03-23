@@ -97,14 +97,20 @@ curl http://localhost:8080/status
 ### Agent Swarm
 
 ```bash
-# Submit a goal — superagent orchestrates the full workflow
 # All enabled colonees are available by default
 curl -X POST http://localhost:8080/invoke \
   -H "Content-Type: application/json" \
   -d '{
     "goal": "Analyse the competitive landscape for EVs in 2025 and produce a report",
-    "user_id": "alice",
     "context": {}
+  }'
+
+# Resume an existing session
+curl -X POST http://localhost:8080/invoke \
+  -H "Content-Type: application/json" \
+  -d '{
+    "goal": "Continue the analysis with a focus on European markets",
+    "session_id": "session_20250323120000_abc12345"
   }'
 
 # Restrict which colonees the superagent may use for this request
@@ -112,7 +118,6 @@ curl -X POST http://localhost:8080/invoke \
   -H "Content-Type: application/json" \
   -d '{
     "goal": "Research and summarise the latest CRISPR breakthroughs",
-    "user_id": "alice",
     "colonees": ["researcher", "analyst"]
   }'
 
@@ -209,7 +214,6 @@ curl -X POST http://localhost:8080/invoke \
   -H "Content-Type: application/json" \
   -d '{
     "goal": "Analyse the competitive landscape for EVs in 2025 and produce a report",
-    "user_id": "alice",
     "colonees": ["researcher", "analyst"]
   }'
 
@@ -217,8 +221,7 @@ curl -X POST http://localhost:8080/invoke \
 curl -X POST http://localhost:8080/invoke \
   -H "Content-Type: application/json" \
   -d '{
-    "goal": "Produce a 2-minute explainer video on quantum computing",
-    "user_id": "bob"
+    "goal": "Produce a 2-minute explainer video on quantum computing"
   }'
 ```
 
