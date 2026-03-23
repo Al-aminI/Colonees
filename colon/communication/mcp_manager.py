@@ -35,6 +35,7 @@ class MCPServerConfig:
     specialist_types: List[str] = field(default_factory=list)
     # HTTP / SSE
     url: Optional[str] = None
+    headers: Optional[Dict[str, str]] = None   # e.g. {"Authorization": "Bearer <token>"}
     # stdio
     command: Optional[str] = None
     args: List[str] = field(default_factory=list)
@@ -63,6 +64,7 @@ class MCPManager:
         name: str,
         transport: Transport,
         url: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
         command: Optional[str] = None,
         args: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None,
@@ -75,9 +77,13 @@ class MCPManager:
             name:             Unique identifier (e.g. "weather", "database").
             transport:        "streamable_http" | "sse" | "stdio"
             url:              Server URL — required for streamable_http and sse.
+            headers:          HTTP headers for streamable_http and sse transports.
+                              Use this for API key auth, bearer tokens, etc.
+                              e.g. {"Authorization": "Bearer sk-...", "X-API-Key": "..."}
             command:          Executable — required for stdio (e.g. "python").
             args:             CLI args for stdio (e.g. ["my_server.py"]).
-            env:              Optional env vars for stdio transport.
+            env:              Env vars for stdio transport — use for secrets the
+                              server process needs (e.g. {"OPENAI_API_KEY": "sk-..."}).
             specialist_types: Which specialist types receive this server's tools.
                               Omit (or pass None) to give tools to ALL specialists.
                               Valid values: "researcher", "domain_expert", "analyst",
@@ -87,18 +93,28 @@ class MCPManager:
                                            "tutor", "video_production"
 
         Examples:
-            # Only the researcher specialist gets weather tools
+            # API-key-authenticated HTTP server, researcher only
             mcp.add_server(
-                "weather", "streamable_http",
-                url="http://localhost:8001/mcp/",
+                "pubmed", "streamable_http",
+                url="https://pubmed-mcp.example.com/mcp/",
+                headers={"X-API-Key": "your-key-here"},
                 specialist_types=["researcher"]
             )
 
-            # Both researcher and analyst get database tools
+            # Bearer token auth
+            mcp.add_server(
+                "legal_db", "sse",
+                url="https://legal-mcp.example.com/sse/",
+                headers={"Authorization": "Bearer eyJ..."},
+                specialist_types=["analyst", "researcher"]
+            )
+
+            # stdio server with secrets passed as env vars
             mcp.add_server(
                 "database", "stdio",
                 command="python", args=["db_server.py"],
-                specialist_types=["researcher", "analyst"]
+                env={"DB_PASSWORD": "secret", "DB_HOST": "localhost"},
+                specialist_types=["analyst"]
             )
 
             # All specialists get this utility server's tools
@@ -109,6 +125,7 @@ class MCPManager:
             transport=transport,
             specialist_types=specialist_types or [],
             url=url,
+            headers=headers,
             command=command,
             args=args or [],
             env=env,
@@ -233,14 +250,16 @@ class MCPManager:
                 raise ValueError(f"MCP server '{cfg.name}': url is required for streamable_http transport")
             from mcp.client.streamable_http import streamablehttp_client
             url = cfg.url
-            return MCPClient(lambda: streamablehttp_client(url))
+            headers = cfg.headers or {}
+            return MCPClient(lambda: streamablehttp_client(url, headers=headers))
 
         elif cfg.transport == "sse":
             if not cfg.url:
                 raise ValueError(f"MCP server '{cfg.name}': url is required for sse transport")
             from mcp.client.sse import sse_client
             url = cfg.url
-            return MCPClient(lambda: sse_client(url))
+            headers = cfg.headers or {}
+            return MCPClient(lambda: sse_client(url, headers=headers))
 
         elif cfg.transport == "stdio":
             if not cfg.command:

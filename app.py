@@ -88,9 +88,23 @@ class MCPServerRequest(BaseModel):
     name: str = Field(..., description="Unique name for this MCP server (e.g. 'weather', 'database').")
     transport: str = Field(..., description="Transport type: 'streamable_http', 'sse', or 'stdio'.")
     url: Optional[str] = Field(None, description="Server URL — required for streamable_http and sse transports.")
+    headers: Optional[Dict[str, str]] = Field(
+        None,
+        description=(
+            "HTTP headers for streamable_http and sse transports. "
+            "Use for API key auth, bearer tokens, or any custom headers. "
+            "e.g. {\"Authorization\": \"Bearer sk-...\", \"X-API-Key\": \"...\"}"
+        ),
+    )
     command: Optional[str] = Field(None, description="Executable — required for stdio transport (e.g. 'python').")
     args: list = Field(default_factory=list, description="CLI args for stdio transport (e.g. ['server.py']).")
-    env: Optional[Dict[str, str]] = Field(None, description="Optional environment variables for stdio transport.")
+    env: Optional[Dict[str, str]] = Field(
+        None,
+        description=(
+            "Environment variables for stdio transport. "
+            "Use to pass secrets the server process needs (e.g. {\"OPENAI_API_KEY\": \"sk-...\"})."
+        ),
+    )
     specialist_types: list = Field(
         default_factory=list,
         description=(
@@ -284,6 +298,7 @@ async def register_mcp_server(body: MCPServerRequest):
             name=body.name,
             transport=body.transport,
             url=body.url,
+            headers=body.headers,
             command=body.command,
             args=body.args,
             env=body.env,
@@ -329,6 +344,8 @@ async def list_mcp_servers():
                 "url": cfg.url,
                 "command": cfg.command,
                 "args": cfg.args,
+                # Mask header values — show keys only so secrets aren't leaked
+                "headers": {k: "***" for k in cfg.headers} if cfg.headers else None,
                 "specialist_types": cfg.specialist_types or ["ALL"],
             }
             for cfg in mcp._servers.values()

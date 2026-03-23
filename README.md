@@ -261,17 +261,29 @@ Rules:
 Register external MCP servers to inject tools into specialists at spawn time.
 
 ```bash
-# Register an MCP server scoped to a specific specialist
+# HTTP server with API key auth (X-API-Key header)
 curl -X POST http://localhost:8080/mcp/servers \
   -H "Content-Type: application/json" \
   -d '{
     "name": "pubmed",
     "transport": "streamable_http",
-    "url": "http://localhost:8001/mcp/",
+    "url": "https://pubmed-mcp.example.com/mcp/",
+    "headers": { "X-API-Key": "your-api-key-here" },
     "specialist_types": ["researcher"]
   }'
 
-# Register a stdio MCP server for multiple specialists
+# SSE server with bearer token auth
+curl -X POST http://localhost:8080/mcp/servers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "legal_db",
+    "transport": "sse",
+    "url": "https://legal-mcp.example.com/sse/",
+    "headers": { "Authorization": "Bearer eyJ..." },
+    "specialist_types": ["analyst", "researcher"]
+  }'
+
+# stdio server — secrets passed as env vars to the server process
 curl -X POST http://localhost:8080/mcp/servers \
   -H "Content-Type: application/json" \
   -d '{
@@ -279,6 +291,7 @@ curl -X POST http://localhost:8080/mcp/servers \
     "transport": "stdio",
     "command": "python",
     "args": ["db_server.py"],
+    "env": { "DB_PASSWORD": "secret", "DB_HOST": "localhost" },
     "specialist_types": ["analyst", "researcher"]
   }'
 
@@ -291,12 +304,27 @@ curl -X POST http://localhost:8080/mcp/servers \
     "url": "http://localhost:8003/mcp/"
   }'
 
-# List registered MCP servers
+# List registered MCP servers (header values are masked in the response)
 curl http://localhost:8080/mcp/servers
 
 # Remove a server
 curl -X DELETE http://localhost:8080/mcp/servers/pubmed
 ```
+
+**Auth patterns by transport:**
+
+| Transport | Auth mechanism | Field |
+|---|---|---|
+| `streamable_http` | API key, bearer token, custom headers | `headers` |
+| `sse` | API key, bearer token, custom headers | `headers` |
+| `stdio` | Env vars passed to the server process | `env` |
+
+The `headers` field accepts any key-value pairs — pass whatever the MCP server expects:
+- `{"X-API-Key": "sk-..."}` — API key header
+- `{"Authorization": "Bearer eyJ..."}` — bearer token
+- `{"X-API-Key": "key", "X-Tenant-ID": "org-123"}` — multiple headers
+
+Header values are masked (`***`) in `GET /mcp/servers` responses so secrets are never leaked through the API.
 
 **MCP tool scoping:**
 - `specialist_types: ["researcher"]` — only the researcher gets these tools
