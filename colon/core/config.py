@@ -195,10 +195,6 @@ class CologeesConfig:
             }
         }
 
-
-# Backward-compat alias
-GALOSConfig = CologeesConfig
-
 # Global configuration instance
 _config: Optional[CologeesConfig] = None
 

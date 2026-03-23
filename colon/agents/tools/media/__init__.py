@@ -1,3 +1,3 @@
-"""Media Tool Agent"""
-from galos.agents.tools.media.media_agent import MediaToolAgent
-__all__ = ['MediaToolAgent']
+"""Media Tool Provider"""
+from colon.agents.tools.media.media_provider import MediaToolProvider
+__all__ = ['MediaToolProvider']

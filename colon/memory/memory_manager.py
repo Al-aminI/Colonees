@@ -127,6 +127,3 @@ class CologeesMemoryManager:
             'max_results': self.config.strands.max_memory_results,
         }
 
-
-# Backward-compat alias
-GALOSStrandsMemoryManager = CologeesMemoryManager

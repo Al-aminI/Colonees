@@ -1,95 +1,31 @@
 # Research Specialization
 
-Provides research and information synthesis capabilities within the GALOS platform.
+Provides research and information synthesis capabilities within the Colonees platform.
 
 ## Overview
 
-The Research specialization focuses on research strategy, information analysis, and source validation. It designs research methodologies and coordinates with tool agents for information retrieval and data gathering.
+The Research specialist handles web research, information gathering, source synthesis, and structured report generation across any domain.
 
 ## Architecture
 
-```
-galos/agents/research/
-├── __init__.py              # Public API exports
-├── README.md                # This file
-├── specialist.py            # ResearchSpecialistAgent
-└── tools/                   # Tool agents
-    ├── __init__.py
-    └── research_agent.py    # Information retrieval operations
-```
+### Specialist Agent
+`ResearchSpecialistAgent` — orchestrates research workflows using research and computation tools.
 
-## Components
+### Tool Providers
 
-### ResearchSpecialistAgent
+#### ResearchTools
+Web search, HTTP requests, and information retrieval.
 
-The main specialist agent that provides research expertise.
+**Capabilities:** `web_search`, `http_request`, `information_retrieval`
 
-**Capabilities:**
-- `research_strategy_design` - Design research methodologies
-- `information_synthesis` - Synthesize information from multiple sources
-- `source_validation` - Validate source credibility
-- `research_methodology` - Create research frameworks
-- `data_analysis` - Analyze research data
+#### ComputationTools
+Data processing and analysis support.
 
-**Domain Expertise:**
-- Subject matter (configurable)
-- Research methods
-- Information science
-- Data analysis
+**Capabilities:** `python_execution`, `calculations`, `mathematical_computation`
 
-### Tool Agents
+## Domain Expertise
 
-#### ResearchToolAgent
-Executes information retrieval operations including web searches, API calls, and content fetching.
-
-**Capabilities:** `web_search`, `information_retrieval`, `api_access`, `content_fetching`
-
-## Usage
-
-```python
-from galos.agents.research import ResearchSpecialistAgent
-
-# Create research specialist
-researcher = ResearchSpecialistAgent(
-    session_manager=session_manager,
-    agent_id="research_001",
-    specialization="computer_science"
-)
-
-# Design research strategy
-strategy = await researcher.design_research_strategy(
-    topic="machine learning optimization",
-    scope="recent_advances",
-    sources=["academic_papers", "technical_blogs"]
-)
-```
-
-## Design Principles
-
-1. **Separation of Concerns**: Specialist handles research strategy, tool agents handle retrieval
-2. **Delegation Pattern**: Specialist delegates all information retrieval operations
-3. **No Direct Tool Access**: Specialist has no tools, only research methodology expertise
-4. **Agent-to-Agent Protocol**: Communication via A2A protocol for coordination
-
-## Integration
-
-The research specialization integrates with:
-- **Agent Directory**: Registration and discovery
-- **Workflow Orchestrator**: Task coordination
-- **Session Manager**: State management
-- **Other Specialists**: Subject experts, tutors, assessment agents
-
-## Configuration
-
-Research agents are configured through the SpecialistAgentFactory:
-
-```python
-from galos.agents.agent_directory import SpecialistAgentFactory
-
-researcher = SpecialistAgentFactory.create_specialist_agent(
-    specialist_type="research",
-    session_manager=session_manager,
-    agent_id="research_001",
-    specialization="biology"
-)
-```
+- Web research and information gathering
+- Source synthesis and summarisation
+- Fact verification
+- Structured report generation

@@ -1,5 +1,5 @@
 """
-File Tool Agent (galos/agents/tools/file/file_agent.py)
+File Tool Provider
 
 Handles file operations using the local filesystem.
 """
@@ -11,19 +11,19 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from strands import Agent, tool
+from strands import tool
 
-from galos.agents.tool_agents import BaseToolAgent
-from galos.core.model_config import get_model
+from colon.agents.tool_providers import ToolProvider
 
 logger = logging.getLogger(__name__)
 
 
-class FileToolAgent(BaseToolAgent):
+class FileToolProvider(ToolProvider):
     """
-    Tool Agent for file operations backed by the local filesystem.
-    Provides read, write, edit, search, copy, move, delete,
-    and metadata capabilities.
+    Tool provider for local filesystem operations.
+
+    Exposes @tool-decorated methods that specialists pass directly into
+    Agent(tools=[...]). Holds shared state: base_dir.
     """
 
     def __init__(
@@ -32,10 +32,10 @@ class FileToolAgent(BaseToolAgent):
         base_dir: Optional[str] = None,
         **kwargs,
     ):
-        # Base directory for all file operations — defaults to ./colonees_files
         self.base_dir = Path(base_dir or os.getenv("COLONEES_FILES_DIR", "colonees_files")).resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         super().__init__(*args, **kwargs)
+        logger.info("FileToolProvider ready — base_dir: %s", self.base_dir)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -44,75 +44,15 @@ class FileToolAgent(BaseToolAgent):
     def _resolve(self, path: str) -> Path:
         """Resolve a logical path to an absolute path under base_dir."""
         resolved = (self.base_dir / path.lstrip("/")).resolve()
-        # Safety: prevent path traversal outside base_dir
         if not str(resolved).startswith(str(self.base_dir)):
             raise ValueError(f"Path traversal attempt blocked: {path}")
         return resolved
 
     def _logical(self, abs_path: Path) -> str:
-        """Convert an absolute path back to a logical path relative to base_dir."""
         return str(abs_path.relative_to(self.base_dir))
 
     def _public_url(self, path: str) -> str:
-        """Return a file:// URL for local access."""
         return self._resolve(path).as_uri()
-
-    # ------------------------------------------------------------------
-    # Agent definition
-    # ------------------------------------------------------------------
-
-    def _create_agent(self) -> Agent:
-        tools = [
-            self.read_file,
-            self.write_file,
-            self.append_to_file,
-            self.delete_file,
-            self.copy_file,
-            self.move_file,
-            self.list_files,
-            self.file_exists,
-            self.get_file_metadata,
-            self.search_in_files,
-            self.replace_in_file,
-            self.read_lines,
-            self.create_folder,
-            self.delete_folder,
-            self.get_public_url,
-        ]
-        logger.info("File agent initialised with %d local-filesystem tools", len(tools))
-
-        return Agent(
-            name=self.agent_id,
-            system_prompt=f"""You are a File Tool Agent backed by the local filesystem.
-
-BASE DIRECTORY: {self.base_dir}
-
-All file paths are logical paths relative to the base directory above.
-Examples: 'scripts/draft.txt', 'reports/summary.pdf', 'exports/final.mp4'
-
-AVAILABLE TOOLS:
-- read_file          : read full file content
-- write_file         : create or overwrite a file
-- append_to_file     : append text to an existing file
-- delete_file        : permanently delete a file
-- copy_file          : copy a file to a new path
-- move_file          : move / rename a file
-- list_files         : list files, optionally filtered by prefix or extension
-- file_exists        : check whether a file exists
-- get_file_metadata  : size, content-type, last-modified
-- search_in_files    : full-text search across files under a prefix
-- replace_in_file    : find-and-replace within a file
-- read_lines         : read a specific line range from a file
-- create_folder      : create a folder
-- delete_folder      : delete an entire folder and its contents
-- get_public_url     : get the local file:// URL for a file
-
-CRITICAL ROLE: You ONLY execute file operations. You do NOT analyse content
-or make decisions about what to read or write.""",
-            model=get_model(),
-            session_manager=self.session_manager,
-            tools=tools,
-        )
 
     def get_capabilities(self) -> List[str]:
         return [

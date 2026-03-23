@@ -1,3 +1,3 @@
-"""Research Tool Agent"""
-from galos.agents.tools.research.research_agent import ResearchToolAgent
-__all__ = ['ResearchToolAgent']
+"""Research tools"""
+from colon.agents.tools.research.research_tools import get_research_tools
+__all__ = ['get_research_tools']

@@ -233,6 +233,3 @@ class CologeesSessionManager:
 
         logger.info("Colonees Session Manager shutdown complete")
 
-
-# Backward-compat alias
-GALOSStrandsSessionManager = CologeesSessionManager

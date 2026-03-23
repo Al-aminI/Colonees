@@ -237,6 +237,3 @@ class ColoneesPlatform:
         self.is_initialized = False
         logger.info("Colonees Platform shutdown complete")
 
-
-# Backward-compat alias
-GALOSPlatform = ColoneesPlatform

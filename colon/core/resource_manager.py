@@ -149,7 +149,7 @@ class CologeesResourceManager:
         """Continuously monitor resource metrics"""
         while self.monitoring_active:
             try:
-                # Collect current metrics from AgentCore Observability
+                # Collect current resource metrics
                 metrics = await self._collect_metrics()
                 self.current_metrics = metrics
 
@@ -167,7 +167,7 @@ class CologeesResourceManager:
     async def _collect_metrics(self) -> ResourceMetrics:
         """Collect current resource utilization metrics"""
         try:
-            # Get metrics from AgentCore Observability
+            # Collect platform metrics
             observability_data = await self.observability.get_metrics(
                 metric_names=[
                     'concurrent_users',
@@ -263,8 +263,7 @@ class CologeesResourceManager:
         """Scale up resources"""
         logger.info(f"Scaling UP: {scaling_event['reason']}")
 
-        # AgentCore Runtime is serverless, so scaling is automatic
-        # We can adjust quotas and limits to allow more resources
+        # Platform is self-hosted, scaling adjusts quotas and limits
         if scaling_event['trigger'] == 'concurrent_users':
             # Increase user capacity
             self.resource_quotas['max_concurrent_users'] = min(

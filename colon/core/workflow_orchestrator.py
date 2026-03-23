@@ -143,6 +143,24 @@ Each specialist has tools embedded and will use them autonomously."""
         """
         task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
+        # Resolve the colonee allowlist for this request
+        colonee_allowlist: Optional[List[str]] = context.get("colonees")
+        if colonee_allowlist is not None:
+            # Validate against enabled colonees
+            if self.agent_manager and hasattr(self.agent_manager, "colonee_registry"):
+                enabled_names = {
+                    c.name for c in self.agent_manager.colonee_registry.list(enabled_only=True)
+                }
+                colonee_allowlist = [n for n in colonee_allowlist if n in enabled_names]
+            available_colonees_str = ", ".join(colonee_allowlist) if colonee_allowlist else "none"
+        else:
+            # All enabled colonees are available
+            if self.agent_manager and hasattr(self.agent_manager, "colonee_registry"):
+                colonee_allowlist = [
+                    c.name for c in self.agent_manager.colonee_registry.list(enabled_only=True)
+                ]
+            available_colonees_str = ", ".join(colonee_allowlist) if colonee_allowlist else "domain_expert, researcher, analyst, executor, media_producer"
+
         try:
             execution = TaskExecution(
                 task_id=task_id,
@@ -157,7 +175,8 @@ Each specialist has tools embedded and will use them autonomously."""
                     'agent_steps': 0,
                     'tool_calls': 0,
                     'recursion_depth': 0,
-                    'agents_spawned': 0
+                    'agents_spawned': 0,
+                    'colonee_allowlist': colonee_allowlist,
                 }
             )
 
@@ -169,6 +188,9 @@ USER REQUEST FOR ORCHESTRATION:
 Goal: {user_goal}
 Context: {context}
 Task ID: {task_id}
+
+AVAILABLE COLONEES FOR THIS REQUEST: {available_colonees_str}
+You MUST only spawn colonees from the list above. Do not spawn any other type.
 
 Please orchestrate this task autonomously. You have tools available to:
 - Analyze the goal and identify needed capabilities
@@ -260,10 +282,11 @@ If there is no final asset, set final_asset.type to "none" and omit url/format.
                 except json.JSONDecodeError as e:
                     logger.warning(f"Failed to parse structured response JSON: {e}")
 
-            # Fallback: extract URLs
+            # Fallback: extract local file paths or URLs
             url_patterns = [
-                r'https://[^\s]+\.s3\.amazonaws\.com/[^\s]+\.(mp4|pdf|png|mp3)',
-                r'https://[^\s]+\.(mp4|pdf|png|mp3)',
+                r'https?://[^\s]+\.(mp4|pdf|png|mp3)',
+                r'file://[^\s]+\.(mp4|pdf|png|mp3)',
+                r'/[^\s]+\.(mp4|pdf|png|mp3)',
             ]
             for pattern in url_patterns:
                 match = re.search(pattern, text, re.IGNORECASE)
@@ -381,6 +404,20 @@ If there is no final asset, set final_asset.type to "none" and omit url/format.
                 # legacy aliases
                 'tutor', 'subject_expert', 'research', 'assessment', 'video_production'
             ]
+            # Also include any user-defined colonees from the registry
+            if self.agent_manager and hasattr(self.agent_manager, 'colonee_registry'):
+                registry_names = [
+                    c.name for c in self.agent_manager.colonee_registry.list(enabled_only=True)
+                ]
+                valid_specialist_types = list(set(valid_specialist_types + registry_names))
+
+            # Enforce per-request colonee allowlist if set
+            for execution in self.active_executions.values():
+                allowlist = execution.safety_metrics.get('colonee_allowlist')
+                if allowlist is not None:
+                    valid_specialist_types = [t for t in valid_specialist_types if t in allowlist]
+                    break
+
             if agent_type not in valid_specialist_types:
                 return {
                     'status': 'failed',
@@ -664,6 +701,17 @@ Complete this task using your tools autonomously.
             'video_production': ['video_creation', 'video_planning', 'asset_coordination'],
         }
 
+        # Check registry for user-defined colonees
+        if self.agent_manager and hasattr(self.agent_manager, 'colonee_registry'):
+            defn = self.agent_manager.colonee_registry.get(agent_type)
+            if defn:
+                return {
+                    'agent_type': agent_type,
+                    'capabilities': defn.capabilities,
+                    'description': defn.description,
+                    'timestamp': datetime.now().isoformat()
+                }
+
         return {
             'agent_type': agent_type,
             'capabilities': capabilities_map.get(agent_type, []),
@@ -693,6 +741,3 @@ Complete this task using your tools autonomously.
 
         return capabilities
 
-
-# Backward-compat alias
-GALOSSupervisorAgent = ColoneesSupervisorAgent

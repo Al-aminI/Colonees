@@ -1,3 +1,4 @@
-"""File Tool Agent"""
-from galos.agents.tools.file.file_agent import FileToolAgent
-__all__ = ['FileToolAgent']
+"""File Tool Provider"""
+from colon.agents.tools.file.file_provider import FileToolProvider
+__all__ = ['FileToolProvider']
+

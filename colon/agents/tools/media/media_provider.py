@@ -1,4 +1,4 @@
-# galos/agents/tools/media/media_agent.py
+# colon/agents/tools/media/media_provider.py
 """
 Media Tool Agent
 
@@ -22,8 +22,8 @@ import requests
 from PIL import Image
 from strands import Agent, tool
 
-from galos.agents.tool_agents import BaseToolAgent
-from galos.core.model_config import get_model
+from colon.agents.tool_providers import ToolProvider
+from colon.core.model_config import get_model
 
 logger = logging.getLogger(__name__)
 
@@ -35,21 +35,23 @@ GEMINI_IMAGE_URL = (
 )
 
 
-class MediaToolAgent(BaseToolAgent):
+class MediaToolProvider(ToolProvider):
     """
-    Tool Agent for all media operations.
+    Tool provider for all media operations.
+
+    Exposes @tool-decorated methods that specialists pass directly into
+    Agent(tools=[...]). Holds shared state: production_dir, gemini_api_key.
 
     Technology stack:
-    - Script generation / refinement : Strands sub-agents
-    - Text-to-speech narration       : Google Gemini TTS (REST)
-    - Scene image generation         : Google Gemini (REST)
-    - Image resizing / processing    : Pillow
-    - Video assembly                 : ffmpeg
-    - Artifact storage               : local filesystem
+    - Script generation  : Strands sub-agent
+    - Text-to-speech     : Google Gemini TTS (REST)
+    - Image generation   : Google Gemini (REST)
+    - Image resizing     : Pillow
+    - Video assembly     : ffmpeg
+    - Artifact storage   : local filesystem
     """
 
     def __init__(self, *args, base_dir: Optional[str] = None, **kwargs):
-        # Root directory for all media productions
         self.base_dir = Path(base_dir or os.getenv("COLONEES_MEDIA_DIR", "colonees_media")).resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -58,6 +60,7 @@ class MediaToolAgent(BaseToolAgent):
         self.production_id: Optional[str] = None
 
         super().__init__(*args, **kwargs)
+        logger.info("MediaToolProvider ready — base_dir: %s", self.base_dir)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -73,19 +76,6 @@ class MediaToolAgent(BaseToolAgent):
         p = (self.production_dir / relative).resolve()
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
-
-    # ------------------------------------------------------------------
-    # Agent capabilities
-    # ------------------------------------------------------------------
-
-    def _create_agent(self) -> Agent:
-        return Agent(
-            name=self.agent_id,
-            system_prompt="Media tool provider - not used standalone",
-            model=get_model(),
-            session_manager=self.session_manager,
-            tools=[],
-        )
 
     def get_capabilities(self) -> List[str]:
         return [
@@ -124,11 +114,6 @@ class MediaToolAgent(BaseToolAgent):
         except Exception as e:
             return {"status": "failed", "error": str(e)}
 
-    # Keep old name as alias so existing specialist system prompts still work
-    @tool
-    def create_production_bucket(self, production_name: str) -> Dict[str, Any]:
-        """Alias for create_production (backward compatibility)."""
-        return self.create_production(production_name)
 
     @tool
     async def write_script(self, instructions: str) -> Dict[str, Any]:
@@ -545,6 +530,13 @@ REMEMBER: SHORT narrations, MANY scenes, VISUAL descriptions!""",
         try:
             self._require_production()
             n = len(scene_image_paths)
+
+            if len(audio_paths) != n:
+                return {
+                    "status": "failed",
+                    "error": f"Mismatch: {n} images but {len(audio_paths)} audio files. Lists must be the same length.",
+                }
+
             w, h = resolution.split("x")
 
             # Measure exact audio durations
@@ -629,11 +621,6 @@ REMEMBER: SHORT narrations, MANY scenes, VISUAL descriptions!""",
         except RuntimeError as e:
             return {"status": "failed", "error": str(e)}
 
-    # Backward-compat alias used by specialist system prompts
-    @tool
-    def save_to_s3(self, key: str, content: str) -> Dict[str, Any]:
-        """Alias for save_to_disk (backward compatibility)."""
-        return self.save_to_disk(key, content)
 
     @tool
     def load_from_disk(self, key: str) -> str:
@@ -652,11 +639,6 @@ REMEMBER: SHORT narrations, MANY scenes, VISUAL descriptions!""",
         except Exception as e:
             return f"ERROR loading {key}: {str(e)}"
 
-    # Backward-compat alias
-    @tool
-    def load_from_s3(self, key: str) -> str:
-        """Alias for load_from_disk (backward compatibility)."""
-        return self.load_from_disk(key)
 
     @tool
     def list_artifacts(self, category: Optional[str] = None) -> Dict[str, Any]:

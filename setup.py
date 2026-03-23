@@ -53,7 +53,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "colonees=galos.cli:main",
+            "colonees=colon.cli:main",
         ],
     },
 )

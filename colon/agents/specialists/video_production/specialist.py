@@ -1,33 +1,34 @@
-# galos/agents/specialists/video_production/specialist.py
 """
-Video Production Specialist Agent
+Video Production / Media Producer Specialist Agent
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import List
 
 from strands import Agent
-from galos.agents.specialist_agents import BaseSpecialistAgent
-from galos.core.model_config import get_model
+from colon.agents.specialist_agents import BaseSpecialistAgent
+from colon.agents.tools.media.media_provider import MediaToolProvider
+from colon.core.model_config import get_model
 
 logger = logging.getLogger(__name__)
 
 
 class VideoProductionSpecialistAgent(BaseSpecialistAgent):
+    _specialist_type = "media_producer"
 
-    def __init__(self, session_manager, agent_id: str, specialization: str, agent_manager=None):
+    def __init__(self, session_manager, agent_id: str, specialization: str,
+                 agent_manager=None, mcp_manager=None):
         self.agent_manager = agent_manager
-        self._media_agent = None
-        super().__init__(session_manager, agent_id, specialization)
+        self._media_provider = None
+        super().__init__(session_manager, agent_id, specialization, mcp_manager)
 
-    def _get_media_agent(self):
-        if self._media_agent is None:
-            from galos.agents.tools.media.media_agent import MediaToolAgent
-            self._media_agent = MediaToolAgent(self.session_manager, f"{self.agent_id}_media")
-        return self._media_agent
+    def _get_media_provider(self):
+        if self._media_provider is None:
+            self._media_provider = MediaToolProvider(self.session_manager, f"{self.agent_id}_media")
+        return self._media_provider
 
     def _create_agent(self) -> Agent:
-        media_agent = self._get_media_agent()
+        ma = self._get_media_provider()
 
         return Agent(
             name=self.agent_id,
@@ -35,22 +36,19 @@ class VideoProductionSpecialistAgent(BaseSpecialistAgent):
             model=get_model(),
             session_manager=self.session_manager,
             tools=[
-                media_agent.create_production,
-                media_agent.create_production_bucket,  # backward-compat alias
-                media_agent.write_script,
-                media_agent.sanitize_image_prompt,
-                media_agent.generate_image,
-                media_agent.resize_image,
-                media_agent.text_to_speech,
-                media_agent.assemble_video,
-                media_agent.save_to_disk,
-                media_agent.save_to_s3,   # backward-compat alias
-                media_agent.load_from_disk,
-                media_agent.load_from_s3,  # backward-compat alias
-                media_agent.list_artifacts,
-                media_agent.delete_artifact,
-                media_agent.get_production_info,
-            ],
+                ma.create_production,
+                ma.write_script,
+                ma.sanitize_image_prompt,
+                ma.generate_image,
+                ma.resize_image,
+                ma.text_to_speech,
+                ma.assemble_video,
+                ma.save_to_disk,
+                ma.load_from_disk,
+                ma.list_artifacts,
+                ma.delete_artifact,
+                ma.get_production_info,
+            ] + self._extra_tools(),
         )
 
     def _build_system_prompt(self) -> str:

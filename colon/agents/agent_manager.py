@@ -12,6 +12,8 @@ from strands import Agent
 from ..core.config import CologeesConfig
 from ..session import CologeesSessionManager
 from ..memory import CologeesMemoryManager
+from ..communication.mcp_manager import MCPManager
+from .colonee_registry import ColoneeRegistry
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -43,18 +45,16 @@ class CologeesAgentManager:
     ):
         self.session_manager = session_manager
         self.memory_manager = memory_manager
-        self.gateway = gateway_client
+        self.gateway = gateway_client  # kept for backward compat, unused
         self.agent_directory = agent_directory
         self.config = config
+        self.mcp = MCPManager()
+        self.colonee_registry = ColoneeRegistry()
 
-        from .tool_agents import ToolAgentFactory
         from .specialist_agents import SpecialistAgentFactory
-
-        self.tool_factory = ToolAgentFactory()
         self.specialist_factory = SpecialistAgentFactory()
 
-        # Active agent registries
-        self.active_tool_agents: Dict[str, Any] = {}
+        # Active specialist registry
         self.active_specialist_agents: Dict[str, Any] = {}
 
         # Capability mappings
@@ -118,16 +118,22 @@ class CologeesAgentManager:
             'creative_direction': 'media_producer',
         }
 
-        # Map new agent types to legacy specialist types for factory
-        self._agent_type_map = {
-            'domain_expert': 'subject_expert',
-            'researcher': 'research',
-            'analyst': 'assessment',
-            'executor': 'tutor',  # tutor has file + computation tools
-            'media_producer': 'video_production',
-        }
+        # NOTE: No _agent_type_map needed — the factory's ColoneeRegistry lookup
+        # and its own internal legacy map handle all type resolution.
 
         logger.info("Colonees Agent Manager initialized")
+        self._sync_capabilities_from_registry()
+
+    def _sync_capabilities_from_registry(self) -> None:
+        """
+        Sync specialist_capabilities map from the colonee registry so that
+        user-defined colonees with custom capabilities are discoverable by
+        the superagent's discover_agents_for_capabilities().
+        """
+        for defn in self.colonee_registry.list(enabled_only=True):
+            for cap in defn.capabilities:
+                if cap not in self.specialist_capabilities:
+                    self.specialist_capabilities[cap] = defn.name
 
     async def create_specialist_agent(
         self,
@@ -143,16 +149,17 @@ class CologeesAgentManager:
         if specialist_session_manager is None:
             logger.info(f"Creating specialist agent without session manager")
 
-        # Map new type names to legacy factory types
-        factory_type = self._agent_type_map.get(specialist_type, specialist_type)
-
+        # Pass the original specialist_type directly — the factory resolves it
+        # via ColoneeRegistry first, then falls back to legacy class map.
         specialist_agent = self.specialist_factory.create_specialist_agent(
-            specialist_type=factory_type,
+            specialist_type=specialist_type,
             specialization=specialization,
             session_manager=specialist_session_manager,
             agent_id=agent_id,
-            agent_manager=self if factory_type == 'video_production' else None,
-            agent_directory=self.agent_directory if factory_type == 'video_production' else None
+            agent_manager=self,
+            agent_directory=self.agent_directory,
+            mcp_manager=self.mcp,
+            colonee_registry=self.colonee_registry,
         )
 
         self.active_specialist_agents[specialist_agent.agent_id] = specialist_agent
@@ -165,7 +172,7 @@ class CologeesAgentManager:
     async def discover_agents_for_capabilities(self, capabilities: List[str]) -> Dict[str, List[str]]:
         """Discover which agent types are needed for given capabilities"""
         discovery = {
-            'tool_agents_needed': [],
+            'tool_providers_needed': [],
             'specialist_agents_needed': [],
             'capability_coverage': {}
         }
@@ -175,8 +182,8 @@ class CologeesAgentManager:
 
             if capability in self.tool_capabilities:
                 tool_type = self.tool_capabilities[capability]
-                if tool_type not in discovery['tool_agents_needed']:
-                    discovery['tool_agents_needed'].append(tool_type)
+                if tool_type not in discovery['tool_providers_needed']:
+                    discovery['tool_providers_needed'].append(tool_type)
                 coverage.append(f"tool:{tool_type}")
 
             if capability in self.specialist_capabilities:
@@ -190,37 +197,22 @@ class CologeesAgentManager:
         return discovery
 
     def get_active_agents_stats(self) -> Dict[str, Any]:
-        """Get statistics about active agents"""
         return {
-            'active_tool_agents': len(self.active_tool_agents),
             'active_specialist_agents': len(self.active_specialist_agents),
-            'total_active_agents': len(self.active_tool_agents) + len(self.active_specialist_agents)
         }
 
     async def cleanup_session_agents(self, session_id: str):
-        """Clean up agents for a specific session"""
-        tool_agents_to_remove = [
-            agent_id for agent_id, agent in self.active_tool_agents.items()
-            if hasattr(agent, 'session_manager') and session_id in str(agent.session_manager)
-        ]
-        for agent_id in tool_agents_to_remove:
-            del self.active_tool_agents[agent_id]
-
-        specialist_agents_to_remove = [
+        """Clean up specialist agents for a specific session"""
+        to_remove = [
             agent_id for agent_id, agent in self.active_specialist_agents.items()
             if hasattr(agent, 'session_manager') and session_id in str(agent.session_manager)
         ]
-        for agent_id in specialist_agents_to_remove:
+        for agent_id in to_remove:
             del self.active_specialist_agents[agent_id]
-
-        logger.info(f"Session cleanup complete: {len(tool_agents_to_remove)} tool agents, {len(specialist_agents_to_remove)} specialist agents")
+        logger.info("Session cleanup complete: %d specialist agents removed", len(to_remove))
 
     async def cleanup_agent(self, agent_id: str) -> bool:
-        """Clean up a specific agent by ID"""
         try:
-            if agent_id in self.active_tool_agents:
-                del self.active_tool_agents[agent_id]
-                return True
             if agent_id in self.active_specialist_agents:
                 del self.active_specialist_agents[agent_id]
                 return True
@@ -240,12 +232,14 @@ class CologeesAgentManager:
         return {}
 
     def get_agent_stats(self) -> Dict[str, Any]:
-        """Get agent management statistics"""
         return {
             'architecture': 'colonees_colony',
             'active_agents': self.get_active_agents_stats(),
-            'supported_tool_types': self.tool_factory.get_available_tool_types(),
-            'supported_specialist_types': self.specialist_factory.get_available_specialist_types(),
+            'supported_specialist_types': self.specialist_factory.get_available_specialist_types(
+                colonee_registry=self.colonee_registry
+            ),
+            'mcp_servers': self.mcp.list_servers(),
+            'colonees': [c.name for c in self.colonee_registry.list()],
         }
 
     async def _register_specialist_in_directory(self, agent, specialist_type: str, specialization: str):
@@ -291,6 +285,3 @@ class CologeesAgentManager:
         except Exception as e:
             logger.error(f"Failed to register specialist agent in directory: {e}")
 
-
-# Backward-compat alias
-GALOSAgentManager = CologeesAgentManager

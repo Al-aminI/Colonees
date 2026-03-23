@@ -21,9 +21,3 @@ __all__ = [
     "AgentStatus",
     "SafetyEnforcer"
 ]
-
-# Backward-compat aliases
-GALOSPlatform = ColoneesPlatform
-GALOSConfig = CologeesConfig
-GALOSAgentManager = CologeesAgentManager
-GALOSSupervisorAgent = ColoneesSupervisorAgent

@@ -11,15 +11,15 @@ The Assessment specialist handles evaluation design, data analysis, and report g
 ### Specialist Agent
 `AssessmentSpecialistAgent` — orchestrates analysis workflows using file, media, and computation tools.
 
-### Tool Agents
+### Tool Providers
 
-#### FileToolAgent
+#### FileToolProvider
 Handles all file I/O: reading input data, writing reports, managing output artifacts.
 
-#### MediaToolAgent
+#### MediaToolProvider
 Generates visual assets: charts, diagrams, infographics, and video output.
 
-#### ComputationToolAgent
+#### ComputationTools
 Executes calculations for scoring, statistics, and data analysis.
 
 ## Domain Expertise
