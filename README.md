@@ -228,4 +228,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 - GitHub: https://github.com/colonees/colonees
 - Issues: https://github.com/colonees/colonees/issues
-- Email: dev@colonees.io
+- Email: alaminibrahim433@gmail.com
