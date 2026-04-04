@@ -1,37 +1,43 @@
 import { useState, useRef, useEffect } from 'react'
-import { PageHeader } from '@/components/layout/PageHeader'
 import { ChatMessage, type ChatMessageData } from '@/components/playground/ChatMessage'
 import { ChatInput } from '@/components/playground/ChatInput'
+import { MessageBubble } from '@/components/sessions/MessageBubble'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
-import { Copy, ExternalLink } from 'lucide-react'
-import { useInvoke } from '@/hooks/useSessions'
-import { useColoneesList } from '@/hooks/useColonees'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Copy, History, Plus, Trash2, X } from 'lucide-react'
+import { useInvoke, addStoredSession, getStoredSessions, removeStoredSession, useSessionHistory, useClearSession } from '@/hooks/useSessions'
 import { useWorkspaces } from '@/hooks/useWorkspaces'
-import { addStoredSession } from '@/hooks/useSessions'
 import { generateSessionId, formatResult } from '@/lib/utils'
 import { useToast } from '@/components/ui/toast'
-import { Link } from 'react-router-dom'
+import { cn } from '@/lib/utils'
 
 export function PlaygroundPage() {
-  const [sessionId] = useState(() => generateSessionId())
+  const [sessionId, setSessionId] = useState(() => generateSessionId())
   const [messages, setMessages] = useState<ChatMessageData[]>([])
-  const [selectedColonees, setSelectedColonees] = useState<string[]>([])
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>('')
-  const [showColoneeFilter, setShowColoneeFilter] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const [historySessions, setHistorySessions] = useState<string[]>([])
+  const [viewingSession, setViewingSession] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const invoke = useInvoke()
-  const { data: coloneeData } = useColoneesList({ enabled_only: true })
   const { data: workspaceData } = useWorkspaces({ enabled_only: true })
   const { toast } = useToast()
-  const colonees = coloneeData?.colonees ?? []
   const workspaces = workspaceData?.workspaces ?? []
+
+  // History panel data
+  const { data: historyData, isLoading: historyLoading } = useSessionHistory(viewingSession ?? '', 100)
+  const clearSession = useClearSession()
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    if (showHistory) setHistorySessions(getStoredSessions())
+  }, [showHistory])
 
   const handleSend = async (goal: string) => {
     const userMsg: ChatMessageData = { role: 'user', content: goal }
@@ -45,14 +51,11 @@ export function PlaygroundPage() {
         goal,
         session_id: sessionId,
         workspace: selectedWorkspace || undefined,
-        colonees: selectedColonees.length > 0 ? selectedColonees : undefined,
       })
-
-      const content = formatResult(result.result)
 
       setMessages(prev => [
         ...prev.slice(0, -1),
-        { role: 'assistant', content },
+        { role: 'assistant', content: formatResult(result.result) },
       ])
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Unknown error'
@@ -64,120 +67,169 @@ export function PlaygroundPage() {
     }
   }
 
-  const copySessionId = () => {
-    navigator.clipboard.writeText(sessionId)
-    toast({ title: 'Session ID copied', variant: 'success' })
+  const startNewSession = () => {
+    setSessionId(generateSessionId())
+    setMessages([])
+    setViewingSession(null)
+  }
+
+  const loadSession = (id: string) => {
+    setViewingSession(id)
+  }
+
+  const deleteSession = async (id: string) => {
+    await clearSession.mutateAsync(id)
+    removeStoredSession(id)
+    setHistorySessions(getStoredSessions())
+    if (viewingSession === id) setViewingSession(null)
+    toast({ title: 'Session cleared', variant: 'info' })
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-6rem)] gap-4">
-      <PageHeader
-        title="Playground"
-        description="Submit goals to the agent swarm and see results in real time"
-      />
-
-      {/* Session info bar */}
-      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-        <span>Session:</span>
-        <code className="font-mono">{sessionId}</code>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={copySessionId}>
-          <Copy className="h-3 w-3" />
-        </Button>
-        <Link to="/sessions" className="flex items-center gap-1 hover:text-foreground transition-colors">
-          <ExternalLink className="h-3 w-3" /> View in Sessions
-        </Link>
-
-        {/* Workspace selector */}
-        <div className="ml-auto flex items-center gap-2">
-          <Select
-            value={selectedWorkspace}
-            onChange={(e) => setSelectedWorkspace(e.target.value)}
-            className="h-7 text-xs w-40"
-          >
-            <option value="">All Workspaces</option>
-            {workspaces.map(w => (
-              <option key={w.name} value={w.name}>{w.display_name}</option>
-            ))}
-          </Select>
-
-          {/* Colonee filter */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setShowColoneeFilter(o => !o)}
-          >
-            Colonees: {selectedColonees.length === 0 ? 'All' : selectedColonees.length + ' selected'}
-          </Button>
-          {showColoneeFilter && (
-            <div className="absolute right-6 mt-1 z-20 rounded-md border bg-card shadow-lg p-3 min-w-[200px]">
-              <div className="fixed inset-0 z-10" onClick={() => setShowColoneeFilter(false)} />
-              <div className="relative z-20 space-y-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">Filter agents</p>
-                {colonees.map(c => (
-                  <label key={c.name} className="flex items-center gap-2 text-xs cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectedColonees.includes(c.name)}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedColonees(prev => [...prev, c.name])
-                        } else {
-                          setSelectedColonees(prev => prev.filter(n => n !== c.name))
-                        }
-                      }}
-                    />
-                    {c.display_name}
-                  </label>
-                ))}
-                {selectedColonees.length > 0 && (
+    <div className="flex h-[calc(100vh-6rem)] gap-0">
+      {/* History side panel */}
+      {showHistory && (
+        <div className="w-64 shrink-0 border-r border-border flex flex-col bg-card/50">
+          <div className="flex items-center justify-between px-3 py-3 border-b border-border">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">History</span>
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowHistory(false)}>
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {historySessions.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center mt-6">No past sessions</p>
+            ) : (
+              historySessions.map(id => (
+                <div
+                  key={id}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs cursor-pointer group',
+                    viewingSession === id ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent',
+                  )}
+                  onClick={() => loadSession(id)}
+                >
+                  <span className="flex-1 truncate font-mono text-[10px]">{id}</span>
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="h-6 text-[10px] w-full mt-1"
-                    onClick={() => setSelectedColonees([])}
+                    size="icon"
+                    className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
+                    onClick={(e) => { e.stopPropagation(); deleteSession(id) }}
                   >
-                    Clear all
+                    <Trash2 className="h-2.5 w-2.5" />
                   </Button>
-                )}
-              </div>
-            </div>
-          )}
+                </div>
+              ))
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Chat area */}
-      <Card className="flex-1 flex flex-col overflow-hidden">
-        <CardContent className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
-              <div className="grid grid-cols-2 gap-2 max-w-md">
-                {[
-                  'Write a Python script that reads a CSV and produces a summary report',
-                  'Research the top 5 open-source LLM inference frameworks and compare them',
-                  'Analyze this data and identify key trends',
-                  'Create a detailed plan for building a REST API with authentication',
-                ].map(example => (
-                  <button
-                    key={example}
-                    className="text-left rounded-lg border border-border p-3 text-xs hover:bg-accent transition-colors"
-                    onClick={() => handleSend(example)}
-                  >
-                    {example}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs">Try one of these examples or type your own goal below.</p>
-            </div>
-          ) : (
-            messages.map((msg, i) => <ChatMessage key={i} message={msg} />)
-          )}
-          <div ref={messagesEndRef} />
-        </CardContent>
-        <div className="p-4 border-t border-border">
-          <ChatInput onSend={handleSend} disabled={invoke.isPending} />
+      {/* Main area */}
+      <div className="flex-1 flex flex-col gap-3 p-4 min-w-0">
+        {/* Top bar */}
+        <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setShowHistory(h => !h)}
+            title="Toggle history"
+          >
+            <History className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs gap-1"
+            onClick={startNewSession}
+          >
+            <Plus className="h-3 w-3" /> New
+          </Button>
+
+          <code className="font-mono text-[10px] text-muted-foreground truncate max-w-[180px]">{sessionId}</code>
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard.writeText(sessionId); toast({ title: 'Copied', variant: 'success' }) }}>
+            <Copy className="h-3 w-3" />
+          </Button>
+
+          <div className="ml-auto">
+            <Select
+              value={selectedWorkspace}
+              onChange={(e) => setSelectedWorkspace(e.target.value)}
+              className="h-7 text-xs w-44"
+            >
+              <option value="">No workspace (all agents)</option>
+              {workspaces.map(w => (
+                <option key={w.name} value={w.name}>{w.display_name}</option>
+              ))}
+            </Select>
+          </div>
         </div>
-      </Card>
+
+        {/* Chat / History viewer */}
+        <Card className="flex-1 flex flex-col overflow-hidden">
+          {viewingSession ? (
+            /* Viewing a past session */
+            <>
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
+                <div className="flex items-center gap-2">
+                  <History className="h-3.5 w-3.5 text-muted-foreground" />
+                  <code className="text-xs text-muted-foreground">{viewingSession}</code>
+                </div>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setViewingSession(null)}>
+                  Back to chat
+                </Button>
+              </div>
+              <CardContent className="flex-1 overflow-y-auto p-4 space-y-4">
+                {historyLoading ? (
+                  <div className="space-y-3">
+                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16" />)}
+                  </div>
+                ) : historyData?.history.length === 0 ? (
+                  <p className="text-center text-sm text-muted-foreground mt-8">No messages in this session.</p>
+                ) : (
+                  historyData?.history.map((turn, i) => (
+                    <MessageBubble key={i} turn={turn} />
+                  ))
+                )}
+              </CardContent>
+            </>
+          ) : (
+            /* Active chat */
+            <>
+              <CardContent className="flex-1 overflow-y-auto p-4 space-y-4">
+                {messages.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
+                    <div className="grid grid-cols-2 gap-2 max-w-md">
+                      {[
+                        'Write a Python script that reads a CSV and produces a summary report',
+                        'Research the top 5 open-source LLM inference frameworks and compare them',
+                        'Analyze this data and identify key trends',
+                        'Create a detailed plan for building a REST API with authentication',
+                      ].map(example => (
+                        <button
+                          key={example}
+                          className="text-left rounded-lg border border-border p-3 text-xs hover:bg-accent transition-colors"
+                          onClick={() => handleSend(example)}
+                        >
+                          {example}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs">Try one of these examples or type your own goal below.</p>
+                  </div>
+                ) : (
+                  messages.map((msg, i) => <ChatMessage key={i} message={msg} />)
+                )}
+                <div ref={messagesEndRef} />
+              </CardContent>
+              <div className="p-4 border-t border-border">
+                <ChatInput onSend={handleSend} disabled={invoke.isPending} />
+              </div>
+            </>
+          )}
+        </Card>
+      </div>
     </div>
   )
 }

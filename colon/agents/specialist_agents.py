@@ -97,6 +97,7 @@ class SpecialistAgentFactory:
         colonee_registry=None,
         connector_manager=None,
         kb_manager=None,
+        workspace: Optional[str] = None,
     ) -> BaseSpecialistAgent:
         """Create specialist agent of specified type."""
 
@@ -132,6 +133,7 @@ class SpecialistAgentFactory:
                     mcp_manager=mcp_manager,
                     connector_manager=connector_manager,
                     kb_manager=kb_manager,
+                    workspace=workspace,
                 )
 
         raise ValueError(

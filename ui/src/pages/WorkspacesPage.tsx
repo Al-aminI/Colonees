@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
@@ -14,7 +15,7 @@ import { Switch } from '@/components/ui/switch'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogHeader } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
-import { Plus, FolderOpen, Trash2, Play, Search } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Play, Search, LayoutTemplate, Sparkles, Bot, Server, Database } from 'lucide-react'
 import {
   useWorkspaces,
   useCreateWorkspace,
@@ -24,8 +25,9 @@ import {
 import { useColoneesList } from '@/hooks/useColonees'
 import { useMcpServers } from '@/hooks/useMcpServers'
 import { useKnowledgeBases } from '@/hooks/useKnowledgeBases'
+import { useTemplates, useTemplateCategories, useApplyTemplate } from '@/hooks/useTemplates'
 import { useToast } from '@/components/ui/toast'
-import type { WorkspaceDefinition } from '@/types'
+import type { WorkspaceDefinition, UseCaseTemplate } from '@/types'
 
 const workspaceFormSchema = z.object({
   name: z.string().regex(/^[a-z0-9_-]+$/, 'Only lowercase letters, numbers, hyphens, underscores').min(2),
@@ -33,7 +35,7 @@ const workspaceFormSchema = z.object({
   description: z.string().min(5),
   icon: z.string().optional(),
   color: z.string().optional(),
-  colonees: z.array(z.string()),
+  colonee: z.string().optional(),
   mcp_servers: z.array(z.string()),
   knowledge_bases: z.array(z.string()),
   enabled: z.boolean(),
@@ -49,8 +51,11 @@ export function WorkspacesPage() {
   const { toast } = useToast()
   const navigate = useNavigate()
 
+  const applyTemplate = useApplyTemplate()
+
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const [showTemplates, setShowTemplates] = useState(false)
 
   const workspaces = data?.workspaces ?? []
   const filtered = workspaces.filter(
@@ -70,15 +75,39 @@ export function WorkspacesPage() {
     await toggleWorkspace.mutateAsync({ name, enabled })
   }
 
+  const handleApplyTemplate = async (templateName: string) => {
+    try {
+      const result = await applyTemplate.mutateAsync(templateName)
+      setShowTemplates(false)
+      toast({
+        title: 'Template applied',
+        description: `Workspace "${result.workspace}" created with ${result.colonees_created.length} colonee(s).`,
+        variant: 'success',
+      })
+      navigate(`/workspaces/${result.workspace}`)
+    } catch (err) {
+      toast({
+        title: 'Failed to apply template',
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: 'error',
+      })
+    }
+  }
+
   return (
     <div>
       <PageHeader
         title="Workspaces"
-        description="Organize your colonees, MCP servers, and knowledge bases into workspaces"
+        description="Organize your colonees, connectors, and knowledge bases into workspaces"
         actions={
-          <Button onClick={() => setShowCreate(true)}>
-            <Plus className="h-4 w-4 mr-2" /> New Workspace
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowTemplates(true)}>
+              <LayoutTemplate className="h-4 w-4 mr-2" /> From Template
+            </Button>
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus className="h-4 w-4 mr-2" /> New Workspace
+            </Button>
+          </div>
         }
       />
 
@@ -120,6 +149,7 @@ export function WorkspacesPage() {
               onToggle={handleToggle}
               onDelete={handleDelete}
               onPlayground={() => navigate('/playground')}
+              onClick={() => navigate(`/workspaces/${w.name}`)}
               isToggling={toggleWorkspace.isPending}
             />
           ))}
@@ -136,13 +166,21 @@ export function WorkspacesPage() {
             description: values.description,
             icon: values.icon || undefined,
             color: values.color || undefined,
-            colonees: values.colonees,
+            colonees: [values.colonee].filter(Boolean) as string[],
             mcp_servers: values.mcp_servers,
             knowledge_bases: values.knowledge_bases,
             enabled: values.enabled,
           })
           toast({ title: 'Workspace created', variant: 'success' })
+          navigate(`/workspaces/${values.name}`)
         }}
+      />
+
+      <TemplatePickerDialog
+        open={showTemplates}
+        onClose={() => setShowTemplates(false)}
+        onApply={handleApplyTemplate}
+        isApplying={applyTemplate.isPending}
       />
     </div>
   )
@@ -155,17 +193,23 @@ function WorkspaceCard({
   onToggle,
   onDelete,
   onPlayground,
+  onClick,
   isToggling,
 }: {
   workspace: WorkspaceDefinition
   onToggle: (name: string, enabled: boolean) => void
   onDelete: (name: string) => void
   onPlayground: () => void
+  onClick: () => void
   isToggling: boolean
 }) {
   const borderColor = workspace.color || '#6366f1'
   return (
-    <Card className="flex flex-col" style={{ borderLeftWidth: 4, borderLeftColor: borderColor }}>
+    <Card
+      className="flex flex-col cursor-pointer hover:border-primary/40 transition-colors"
+      style={{ borderLeftWidth: 4, borderLeftColor: borderColor }}
+      onClick={onClick}
+    >
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2 min-w-0">
@@ -174,8 +218,9 @@ function WorkspaceCard({
           </div>
           <Switch
             checked={workspace.enabled}
-            onCheckedChange={(v) => onToggle(workspace.name, v)}
+            onCheckedChange={(v) => { onToggle(workspace.name, v) }}
             disabled={isToggling}
+            onClick={(e) => e.stopPropagation()}
           />
         </div>
         <p className="text-xs text-muted-foreground font-mono">{workspace.name}</p>
@@ -184,7 +229,7 @@ function WorkspaceCard({
         <p className="text-sm text-muted-foreground line-clamp-2">{workspace.description}</p>
         <div className="mt-3 flex flex-wrap gap-1.5">
           <Badge variant="secondary">
-            {workspace.colonees.length} agent{workspace.colonees.length !== 1 ? 's' : ''}
+            {workspace.colonees[0] || 'No agent'}
           </Badge>
           <Badge variant="secondary">
             {workspace.mcp_servers.length} MCP
@@ -194,7 +239,7 @@ function WorkspaceCard({
           </Badge>
         </div>
       </CardContent>
-      <CardFooter className="gap-2">
+      <CardFooter className="gap-2" onClick={(e) => e.stopPropagation()}>
         <Button variant="outline" size="sm" onClick={onPlayground}>
           <Play className="h-3.5 w-3.5 mr-1" /> Playground
         </Button>
@@ -242,14 +287,13 @@ function CreateWorkspaceDialog({
   } = useForm<WorkspaceFormValues>({
     resolver: zodResolver(workspaceFormSchema),
     defaultValues: {
-      colonees: [],
+      colonee: '',
       mcp_servers: [],
       knowledge_bases: [],
       enabled: true,
     },
   })
 
-  const selectedColonees = watch('colonees') ?? []
   const selectedMcp = watch('mcp_servers') ?? []
   const selectedKB = watch('knowledge_bases') ?? []
 
@@ -327,33 +371,18 @@ function CreateWorkspaceDialog({
 
         <Separator />
 
-        {/* Colonees */}
+        {/* Specialist Agent */}
         {colonees.length > 0 && (
           <section>
-            <h3 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wide">
-              Colonees
-            </h3>
-            <div className="grid grid-cols-2 gap-2">
-              {colonees.map((c) => (
-                <label key={c.name} className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={selectedColonees.includes(c.name)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setValue('colonees', [...selectedColonees, c.name])
-                      } else {
-                        setValue(
-                          'colonees',
-                          selectedColonees.filter((n) => n !== c.name),
-                        )
-                      }
-                    }}
-                    className="rounded"
-                  />
-                  <span>{c.display_name}</span>
-                </label>
-              ))}
+            <div>
+              <Label>Specialist Agent</Label>
+              <Select {...register('colonee')} className="mt-1 w-full">
+                <option value="">Select a colonee...</option>
+                {colonees.map(c => (
+                  <option key={c.name} value={c.name}>{c.display_name}</option>
+                ))}
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">The specialist agent that will handle all tasks in this workspace</p>
             </div>
           </section>
         )}
@@ -429,6 +458,95 @@ function CreateWorkspaceDialog({
           </Button>
         </div>
       </form>
+    </Dialog>
+  )
+}
+
+/* -- Template Picker Dialog ------------------------------------------------ */
+
+function TemplatePickerDialog({
+  open,
+  onClose,
+  onApply,
+  isApplying,
+}: {
+  open: boolean
+  onClose: () => void
+  onApply: (name: string) => void
+  isApplying: boolean
+}) {
+  const { data: templatesData, isLoading } = useTemplates()
+
+  const templates = templatesData?.templates ?? []
+
+  return (
+    <Dialog open={open} onClose={onClose} className="max-w-2xl">
+      <DialogHeader title="Create Workspace from Template" onClose={onClose} />
+
+      {isLoading ? (
+        <div className="grid grid-cols-2 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-32" />
+          ))}
+        </div>
+      ) : templates.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-3">
+          <LayoutTemplate className="h-10 w-10 opacity-20" />
+          <p className="text-sm">No templates available.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto">
+          {templates.map((t) => {
+            const gradientColor = t.color || '#6366f1'
+            return (
+              <Card
+                key={t.name}
+                className="cursor-pointer hover:border-primary/40 transition-colors overflow-hidden"
+                onClick={() => onApply(t.name)}
+              >
+                <div
+                  className="h-1.5"
+                  style={{
+                    background: `linear-gradient(135deg, ${gradientColor}, ${gradientColor}88)`,
+                  }}
+                />
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    {t.icon && <span className="text-base">{t.icon}</span>}
+                    <span className="font-semibold text-sm truncate">{t.display_name}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{t.description}</p>
+                  <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <Bot className="h-3 w-3" />
+                      {t.colonees.length}
+                    </span>
+                    {t.mcp_server_suggestions.length > 0 && (
+                      <span className="flex items-center gap-1">
+                        <Server className="h-3 w-3" />
+                        {t.mcp_server_suggestions.length}
+                      </span>
+                    )}
+                    {t.recommended_knowledge_bases.length > 0 && (
+                      <span className="flex items-center gap-1">
+                        <Database className="h-3 w-3" />
+                        {t.recommended_knowledge_bases.length}
+                      </span>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+
+      {isApplying && (
+        <div className="flex items-center gap-2 mt-3 text-sm text-muted-foreground">
+          <Sparkles className="h-4 w-4 animate-pulse" />
+          Applying template...
+        </div>
+      )}
     </Dialog>
   )
 }

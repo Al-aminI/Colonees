@@ -316,7 +316,7 @@ async def invoke(body: InvokeRequest):
 
         result = await platform.handle_request(
             user_goal=body.goal,
-            context={"session_id": body.session_id, "colonees": colonees, **body.context},
+            context={"session_id": body.session_id, "workspace": body.workspace, "colonees": colonees, **body.context},
         )
         return InvokeResponse(status="success", result=_serialize(result))
     except HTTPException:

@@ -128,7 +128,8 @@ class CologeesAgentManager:
         specialist_type: str,
         specialization: str,
         session_id: str,
-        agent_id: Optional[str] = None
+        agent_id: Optional[str] = None,
+        workspace: Optional[str] = None,
     ) -> Any:
         """Create a Specialist Agent with its own Strands session manager."""
         # Each specialist gets a session-scoped Strands session manager so its
@@ -149,6 +150,7 @@ class CologeesAgentManager:
             colonee_registry=self.colonee_registry,
             connector_manager=self.connector_manager,
             kb_manager=self.kb_manager,
+            workspace=workspace,
         )
 
         self.active_specialist_agents[specialist_agent.agent_id] = specialist_agent

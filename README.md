@@ -25,28 +25,26 @@ It is domain-agnostic and embeddable — deployable across customer support, fin
 3. **Knowledge Base** &rarr; Upload product docs, internal guides, FAQ articles
    - Agents get `search_knowledge_base` tool &rarr; they **know your product**
 
-4. **Colonees** &rarr; Create specialists:
-   - "App Navigator" (tools: repo + API) &rarr; understands UI flow and can explain how features work
-   - "Action Agent" (tools: API) &rarr; performs actions on behalf of users
-   - "Support Agent" (tools: KB + API) &rarr; answers questions using docs + live data
+4. **Colonee** &rarr; Create your copilot specialist — a single powerful agent loaded with ALL the tools from above (API endpoints + repo search + KB search + built-in tools). It can call APIs, search code, and reference docs all within one reasoning loop.
 
-5. **Workspace** &rarr; Group all of the above into "MyApp Copilot" workspace
+5. **Workspace** &rarr; Group the colonee + connectors + knowledge bases into "MyApp Copilot"
 
 6. **Playground** &rarr; Select workspace &rarr; ask: *"Show me the last 5 orders for user john@example.com and explain the checkout flow"*
-   - Supervisor spawns Action Agent (calls `get_orders` API) + App Navigator (searches codebase for checkout components)
-   - Returns real data + architectural explanation
+   - Supervisor routes to the copilot colonee
+   - The colonee calls `get_orders` (API tool), then `search_codebase("checkout")` (repo tool), then `search_knowledge_base("checkout process")` (KB tool)
+   - Reasons over all three results together &rarr; returns real data + code explanation + doc references in one integrated answer
 
 ### Customer Support Center
 
-Connect your ticketing system's API, upload your support playbooks, wire up Slack — agents handle tickets, escalate issues, and respond to customers.
+Connect your ticketing system's API, upload your support playbooks, wire up Slack. One specialist colonee has all the tools — it reads tickets, searches your playbook, drafts responses, and escalates to Slack, all in a single reasoning chain.
 
 ### Legal Research Platform
 
-Upload case law documents, connect legal databases, create contract analyzer and compliance checker agents that work together to review and annotate documents.
+Upload case law documents, connect legal databases. A single legal specialist colonee can search precedents, cross-reference statutes, and produce annotated summaries — all tools available in one agent context, no coordination overhead.
 
 ### Internal Engineering Copilot
 
-Point to your monorepo, connect your CI/CD API, upload your architecture docs — agents can explain code, investigate bugs, and even trigger deployments.
+Point to your monorepo, connect your CI/CD API, upload your architecture docs. One colonee can search code, read build logs, reference docs, and explain what's happening — integrated reasoning across all your engineering tools.
 
 ---
 
@@ -68,22 +66,25 @@ Point to your monorepo, connect your CI/CD API, upload your architecture docs �
 ├───────────────────────────────────────────────────────────────┤
 │                     Tool Injection Pipeline                    │
 │  Built-in → MCP → Connectors (OpenAPI/Repo) → Knowledge Base  │
-│  All auto-injected at agent spawn time                        │
+│  All auto-injected into ONE specialist at spawn time           │
 ├───────────────────────────────────────────────────────────────┤
-│                   Supervisor Orchestrator                      │
-│  Analyze goal → Discover agents → Spawn → Delegate → Synthesize│
+│                   Supervisor (Lightweight Router)              │
+│  Analyze goal → Route to the right colonee → Return result    │
 └───────────────────────────────────────────────────────────────┘
 ```
 
 ### How It Works
 
-1. **User submits a goal** (natural language) to the supervisor agent
-2. **Supervisor analyzes** the goal and identifies required capabilities
-3. **Discovers and spawns** the right specialist agents from the colony
-4. **Each specialist** gets its tools injected automatically — built-in tools, MCP servers, connector-generated API tools, repo search tools, and knowledge base search
-5. **Specialists execute** their tasks autonomously — calling APIs, searching code, querying knowledge bases
-6. **Supervisor synthesizes** all results into a coherent response
-7. **Session persists** — continue the conversation across requests
+**Single-specialist-per-workspace model** — one powerful agent handles the entire use case.
+
+1. **User submits a goal** (natural language) within a workspace context
+2. **Supervisor routes** to the right colonee for this workspace
+3. **The colonee has ALL tools** injected automatically — built-in tools, MCP servers, connector-generated API tools (every endpoint from your Swagger spec), repo search tools, and knowledge base search
+4. **One agent reasons end-to-end** — it calls APIs, searches code, queries knowledge bases, performs computations, all within a single reasoning loop with full context
+5. **No coordination overhead** — the agent sees every tool result in its context window, so it can reason across API data + code + docs together
+6. **Session persists** — continue the conversation across requests
+
+The power comes from the **breadth of tools available to a single specialist**, not from coordinating multiple agents. A copilot colonee with 50+ tools (API endpoints, repo search, KB search, file operations) can handle complex, multi-step goals autonomously.
 
 ---
 
@@ -496,53 +497,60 @@ When a specialist agent is spawned, its tools are assembled automatically from f
 │                          ColoneesPlatform                                    │
 │                                                                              │
 │  1. Resolve session_id (caller-supplied or auto-generated)                   │
-│  2. Resolve workspace → auto-select colonees if workspace provided          │
+│  2. Resolve workspace → identify the right colonee                          │
 │  3. Store user turn → MemoryManager                                         │
-│  4. Delegate to SupervisorAgent.handle_request()                            │
+│  4. Delegate to SupervisorAgent (lightweight router)                        │
 │  5. Store assistant response → MemoryManager                                │
 │  6. Return result                                                           │
 └──────────────────────────────────────────────────────────────────────────────┘
                                            │
                                            ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                     ColoneesSupervisorAgent  (Strands Agent)                 │
+│                     ColoneesSupervisorAgent  (Router)                        │
 │                                                                              │
-│  Autonomous orchestration — LLM decides when to call each tool:             │
+│  Lightweight routing — picks the right colonee, delegates, returns result:  │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │  analyze_goal          → extract required capabilities              │    │
-│  │  discover_agents       → query AgentDirectory for matching agents   │    │
-│  │  spawn_agent           → create specialist via AgentManager         │    │
-│  │  send_task_to_agent    → invoke specialist with a sub-task          │    │
-│  │  synthesize_results    → combine specialist outputs                 │    │
-│  │  monitor_execution     → check step/tool/time/agent limits          │    │
+│  │  analyze_goal          → understand what the user needs             │    │
+│  │  discover_agents       → find the best colonee for this workspace   │    │
+│  │  spawn_agent           → create the specialist with ALL its tools   │    │
+│  │  send_task_to_agent    → delegate the FULL goal to that specialist  │    │
+│  │  synthesize_results    → format the specialist's response           │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
-│  Safety: 20 steps · 30 tool calls · 5 recursion · 10 min · 10 agents       │
-│  Colonee allowlist: per-request or per-workspace agent restriction          │
+│  The specialist does the real work — the supervisor just routes to it.      │
 └──────────────────────────────────────────────────────────────────────────────┘
-                    │ spawn_agent                    │ send_task_to_agent
-                    ▼                                ▼
-┌───────────────────────────────┐    ┌───────────────────────────────────────┐
-│      CologeesAgentManager     │    │     DynamicSpecialistAgent             │
-│                               │    │     (Strands Agent)                    │
-│  1. Create session ID         │    │                                       │
-│  2. Create session manager    │    │  Driven by ColoneeDefinition:          │
-│  3. Instantiate specialist    │    │  · System prompt + constraints         │
-│  4. Register in directory     │    │  · Built-in + MCP + Connector + KB    │
-│  5. Pass connector_manager    │    │    tools all injected at spawn         │
-│     and kb_manager through    │    │  · Autonomous tool usage               │
-└───────────────────────────────┘    └───────────────────────────────────────┘
-                                                      │
-                         ┌────────────────┬───────────┼───────────┬──────────┐
-                         ▼                ▼           ▼           ▼          ▼
-                  ┌────────────┐ ┌────────────┐ ┌──────────┐ ┌────────┐ ┌────────┐
-                  │ Built-in   │ │ MCP Server │ │ OpenAPI  │ │ Repo   │ │ KB     │
-                  │ Tools      │ │ Tools      │ │ Tools    │ │ Tools  │ │ Search │
-                  │ file/media │ │ (external) │ │ (auto)   │ │ (auto) │ │ (auto) │
-                  │ research/  │ │            │ │          │ │        │ │        │
-                  │ compute    │ │            │ │          │ │        │ │        │
-                  └────────────┘ └────────────┘ └──────────┘ └────────┘ └────────┘
+                                           │
+                                           ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                 DynamicSpecialistAgent  (The Actual Copilot)                 │
+│                                                                              │
+│  ONE powerful agent with ALL tools from the workspace:                       │
+│                                                                              │
+│  ┌─────────┐ ┌─────────┐ ┌──────────────┐ ┌──────────┐ ┌─────────────┐    │
+│  │Built-in │ │  MCP    │ │   OpenAPI     │ │   Repo   │ │  Knowledge  │    │
+│  │ Tools   │ │ Server  │ │   Tools      │ │  Tools   │ │  Base Search│    │
+│  │file,    │ │ Tools   │ │ (auto from   │ │ (auto    │ │ (auto from  │    │
+│  │compute, │ │(extern.)│ │  Swagger)    │ │  from    │ │  uploaded   │    │
+│  │research,│ │         │ │ get_orders,  │ │  GitHub) │ │  documents) │    │
+│  │media    │ │         │ │ create_user, │ │ search,  │ │             │    │
+│  │         │ │         │ │ list_tickets │ │ read,    │ │             │    │
+│  │         │ │         │ │ ...50+ tools │ │ list     │ │             │    │
+│  └─────────┘ └─────────┘ └──────────────┘ └──────────┘ └─────────────┘    │
+│                                                                              │
+│  The agent reasons over ALL tool results in ONE context window.             │
+│  API data + code + docs = integrated answer. No coordination overhead.      │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Why Single-Specialist-Per-Workspace?
+
+A single agent with 50+ tools outperforms multiple coordinated agents because:
+
+- **Zero context loss** — API results, code search, and doc search are all in one context window, so the agent reasons across them together
+- **No double work** — one reasoning loop, one agent, it knows what it already did
+- **No coordination overhead** — no tokens wasted on inter-agent communication
+- **Modern LLMs handle many tools well** — tool selection accuracy is high with 50-100+ tools
+- **Simpler to debug** — one trace, one chain, one agent
 
 ### Memory & Session Architecture
 
@@ -564,8 +572,8 @@ When a specialist agent is spawned, its tools are assembled automatically from f
 
 ### Core Principles
 
-- **Superagent orchestrates** — never executes tools directly
-- **Specialists reason and use tools** — never orchestrate other agents
+- **Supervisor routes** — picks the right colonee, never executes tools directly
+- **One specialist per workspace** — loaded with ALL tools, handles the full use case end-to-end
 - **Tool providers execute** — no reasoning, no LLM calls
 - **All specialist types are data-driven** (`ColoneeDefinition`) — no Python subclass needed
 - **Connectors auto-generate tools** — paste a URL, get callable functions
@@ -798,6 +806,77 @@ colonees/
         ├── components/             # UI components (shadcn-style)
         └── pages/                  # 10 page components
 ```
+
+---
+
+## Roadmap: Collaborative Agent Swarm
+
+The current architecture uses a **single powerful specialist per workspace** — one agent with all the tools handles the full use case. This is the most reliable and accurate model for v1.
+
+The next evolution is **collaborative multi-agent orchestration** — multiple specialists working together on complex goals that genuinely benefit from decomposition, with a shared collaboration board and real-time supervisor oversight.
+
+### The Vision: `collab.md` Protocol
+
+When a goal is too complex for a single specialist (e.g., "audit the entire codebase, redesign the API, and update all documentation"), the supervisor creates a **collaboration board** (`collab.md`) and orchestrates multiple specialists:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     COLLABORATION BOARD (collab.md)                  │
+│                                                                     │
+│  Objective: "Audit codebase, redesign API, update docs"            │
+│  Status: IN PROGRESS                                               │
+│                                                                     │
+│  ┌─────────────────────┐  ┌─────────────────────┐                  │
+│  │ Task 1: Code Audit  │  │ Task 2: API Redesign│                  │
+│  │ Assigned: analyst    │  │ Assigned: executor   │                  │
+│  │ Status: COMPLETE     │  │ Status: IN PROGRESS  │                  │
+│  │ Findings: [...]      │  │ Progress: 60%        │                  │
+│  │                      │  │ Depends on: Task 1   │                  │
+│  └─────────────────────┘  └─────────────────────┘                  │
+│  ┌─────────────────────┐                                           │
+│  │ Task 3: Update Docs │                                           │
+│  │ Assigned: researcher │                                           │
+│  │ Status: WAITING      │                                           │
+│  │ Depends on: Task 2   │                                           │
+│  └─────────────────────┘                                           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### How It Will Work
+
+1. **Supervisor decomposes** the goal into tasks with clear definitions, dependencies, and assignments
+2. **Supervisor writes the plan to `collab.md`** — the shared collaboration board
+3. **Each specialist reviews the full plan**, picks its assigned task, and begins work
+4. **Specialists report progress** — every finding, challenge, or state change is written to `collab.md`
+5. **Every write to `collab.md` triggers the supervisor** to review:
+   - Is the specialist on track?
+   - Is there drift from the objective?
+   - Does another specialist need to be notified of a dependency being met?
+   - Should a new specialist be spawned to handle an unexpected sub-task?
+6. **Supervisor intervenes proactively** — if it detects a gap, a blocker, or a predictive drift, it calls the specialist's attention by writing a directive to the board
+7. **Specialist sees the directive** on its next board check, re-evaluates its plan, and adjusts
+8. **Timeout watchdog** — if no specialist reports to `collab.md` within a configurable window, the supervisor pings all active specialists to report progress and confirm they're still working
+9. **Completion** — when all tasks are marked complete, the supervisor reviews the full board, decides if the objective is met, and either:
+   - Spawns new specialists for gaps discovered during collaboration
+   - Synthesizes all results and responds to the user
+
+### Why This Matters
+
+This model mirrors how high-performing human teams work:
+- A **shared document** (the board) that everyone can see
+- **Asynchronous progress updates** — no one blocks waiting for others
+- A **project manager** (supervisor) who monitors, intervenes early, and keeps things on track
+- **Clear task ownership** with explicit dependencies
+- **Adaptive planning** — the plan evolves based on what specialists discover
+
+### When to Use Each Model
+
+| Model | When | Example |
+|-------|------|---------|
+| **Single specialist** (current) | One domain, integrated reasoning needed | "Show me recent orders and explain the checkout flow" |
+| **Collaborative swarm** (future) | Multiple domains, tasks can be decomposed, results need synthesis | "Audit the codebase for security issues, fix the critical ones, and produce a compliance report" |
+
+The platform will automatically decide which model to use based on goal complexity analysis.
 
 ---
 

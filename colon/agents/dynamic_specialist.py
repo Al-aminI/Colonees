@@ -34,12 +34,14 @@ class DynamicSpecialistAgent(BaseSpecialistAgent):
         mcp_manager=None,
         connector_manager=None,
         kb_manager=None,
+        workspace: str = None,
     ):
         self.definition = definition
         self.agent_manager = agent_manager
         self._specialist_type = definition.specialist_type
         self._connector_manager = connector_manager
         self._kb_manager = kb_manager
+        self._workspace = workspace
 
         # Lazy-loaded tool agent instances
         self._file_agent = None
@@ -176,13 +178,16 @@ class DynamicSpecialistAgent(BaseSpecialistAgent):
         ]
 
     def _load_knowledge_tools(self) -> list:
-        """Load knowledge base search tools if a KnowledgeBaseManager is available."""
+        """Load knowledge base search tools scoped to this workspace."""
         if not self._kb_manager:
             return []
         try:
             from colon.agents.tools.knowledge.knowledge_tools import KnowledgeBaseToolProvider
-            # Get all enabled KBs (or filter by workspace if colonee has workspace scope)
             kbs = self._kb_manager.list(enabled_only=True)
+            # Filter by workspace — only load KBs scoped to this workspace
+            if self._workspace:
+                kbs = [kb for kb in kbs
+                       if not kb.workspaces or self._workspace in kb.workspaces]
             kb_names = [kb.name for kb in kbs]
             if not kb_names:
                 return []
@@ -193,7 +198,7 @@ class DynamicSpecialistAgent(BaseSpecialistAgent):
             return []
 
     def _load_connector_tools(self) -> list:
-        """Load tools from connectors (OpenAPI, Repo) scoped to this specialist type."""
+        """Load tools from connectors (OpenAPI, Repo) scoped to this workspace and specialist type."""
         if not self._connector_manager:
             return []
         tools = []
@@ -201,6 +206,10 @@ class DynamicSpecialistAgent(BaseSpecialistAgent):
         connectors = self._connector_manager.get_connectors_for_specialist(
             self._specialist_type
         )
+        # Filter by workspace — only load connectors scoped to this workspace
+        if self._workspace:
+            connectors = [c for c in connectors
+                          if not c.workspaces or self._workspace in c.workspaces]
         for conn in connectors:
             if conn.status != "connected" or not conn.enabled:
                 continue
