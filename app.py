@@ -11,7 +11,8 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,10 @@ from colon.core.config import CologeesConfig
 from colon.agents.colonee_registry import (
     ColoneeDefinition, MemoryConfig, ConstraintsConfig, EvaluationConfig,
 )
+from colon.core.workspace import WorkspaceManager, WorkspaceDefinition
+from colon.core.knowledge_base import KnowledgeBaseManager, KnowledgeBaseDefinition
+from colon.core.templates import TemplateRegistry
+from colon.connectors import ConnectorManager, ConnectorCatalog, OpenAPIConnector, RepoConnector
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,11 +41,26 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:4173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # ---------------------------------------------------------------------------
 # Platform singleton
 # ---------------------------------------------------------------------------
 
 _platform: Optional[ColoneesPlatform] = None
+_workspace_manager: Optional[WorkspaceManager] = None
+_kb_manager: Optional[KnowledgeBaseManager] = None
+_template_registry = TemplateRegistry()  # read-only, no persistence needed
+_connector_manager: Optional[ConnectorManager] = None
 
 
 async def get_platform() -> ColoneesPlatform:
@@ -52,6 +72,33 @@ async def get_platform() -> ColoneesPlatform:
         await _platform.initialize()
         logger.info("Colonees Platform ready")
     return _platform
+
+
+def get_workspace_manager() -> WorkspaceManager:
+    global _workspace_manager
+    if _workspace_manager is None:
+        storage_dir = os.getenv("COLONEES_STORAGE_DIR", "colonees_files")
+        _workspace_manager = WorkspaceManager(storage_dir=storage_dir)
+        logger.info("WorkspaceManager initialized (storage: %s)", storage_dir)
+    return _workspace_manager
+
+
+def get_kb_manager() -> KnowledgeBaseManager:
+    global _kb_manager
+    if _kb_manager is None:
+        storage_dir = os.getenv("COLONEES_STORAGE_DIR", "colonees_files")
+        _kb_manager = KnowledgeBaseManager(storage_dir=storage_dir)
+        logger.info("KnowledgeBaseManager initialized (storage: %s)", storage_dir)
+    return _kb_manager
+
+
+def get_connector_manager() -> ConnectorManager:
+    global _connector_manager
+    if _connector_manager is None:
+        storage_dir = os.getenv("COLONEES_STORAGE_DIR", "colonees_files")
+        _connector_manager = ConnectorManager(storage_dir=storage_dir)
+        logger.info("ConnectorManager initialized (storage: %s)", storage_dir)
+    return _connector_manager
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +122,13 @@ class InvokeRequest(BaseModel):
             "Optional allowlist of colonee names the superagent may spawn for this request. "
             "If omitted, all enabled colonees are available. "
             "Example: ['researcher', 'analyst']"
+        ),
+    )
+    workspace: Optional[str] = Field(
+        None,
+        description=(
+            "Optional workspace name. When provided and `colonees` is not explicitly set, "
+            "the colonee list is auto-populated from the workspace definition."
         ),
     )
 
@@ -236,14 +290,37 @@ async def invoke(body: InvokeRequest):
 
     The superagent decomposes the goal, delegates to specialist agents,
     and returns the final synthesised result.
+
+    If `workspace` is provided and `colonees` is not explicitly set,
+    the colonee allowlist is auto-populated from the workspace definition.
     """
     try:
         platform = await get_platform()
+
+        # Resolve colonees from workspace when not explicitly provided
+        colonees = body.colonees
+        if colonees is None and body.workspace:
+            ws_mgr = get_workspace_manager()
+            ws = ws_mgr.get(body.workspace)
+            if ws is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Workspace '{body.workspace}' not found.",
+                )
+            if not ws.enabled:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Workspace '{body.workspace}' is disabled.",
+                )
+            colonees = ws.colonees or None
+
         result = await platform.handle_request(
             user_goal=body.goal,
-            context={"session_id": body.session_id, "colonees": body.colonees, **body.context},
+            context={"session_id": body.session_id, "colonees": colonees, **body.context},
         )
         return InvokeResponse(status="success", result=_serialize(result))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Invoke failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -539,6 +616,905 @@ async def disable_colonee(name: str):
         return {"status": "disabled", "name": name, "colonee": updated.to_dict()}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Workspace Schemas
+# ---------------------------------------------------------------------------
+
+class WorkspaceCreateRequest(BaseModel):
+    name: str = Field(..., description="Unique slug for this workspace, e.g. 'customer_support'.")
+    display_name: str = Field(..., description="Human-readable name, e.g. 'Customer Support'.")
+    description: str = Field(..., description="What this workspace is for.")
+    colonees: list = Field(default_factory=list, description="Colonee names to include.")
+    mcp_servers: list = Field(default_factory=list, description="MCP server names to include.")
+    knowledge_bases: list = Field(default_factory=list, description="Knowledge base names to include.")
+    icon: str = Field(default="", description="Emoji or icon name for the UI.")
+    color: str = Field(default="#3b82f6", description="Hex color for the UI.")
+    created_by: str = "api"
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    colonees: Optional[list] = None
+    mcp_servers: Optional[list] = None
+    knowledge_bases: Optional[list] = None
+    icon: Optional[str] = None
+    color: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Workspace Routes
+# ---------------------------------------------------------------------------
+
+@app.post("/workspaces", tags=["Workspaces"], status_code=201)
+async def create_workspace(body: WorkspaceCreateRequest):
+    """
+    Create a new Workspace — a logical grouping of colonees, MCP servers,
+    and knowledge bases for a specific use case.
+
+    Once created, pass the workspace name in `/invoke` to automatically
+    scope the agent swarm to the workspace's colonees.
+    """
+    try:
+        ws_mgr = get_workspace_manager()
+        defn = WorkspaceDefinition(
+            name=body.name,
+            display_name=body.display_name,
+            description=body.description,
+            colonees=body.colonees,
+            mcp_servers=body.mcp_servers,
+            knowledge_bases=body.knowledge_bases,
+            icon=body.icon,
+            color=body.color,
+            created_by=body.created_by,
+        )
+        created = ws_mgr.create(defn)
+        return created.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        logger.error("Create workspace failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/workspaces", tags=["Workspaces"])
+async def list_workspaces(enabled_only: bool = False):
+    """
+    List all workspaces.
+
+    Filter by `enabled_only=true` to see only active workspaces.
+    """
+    try:
+        ws_mgr = get_workspace_manager()
+        workspaces = ws_mgr.list(enabled_only=enabled_only)
+        return {"workspaces": [ws.to_dict() for ws in workspaces], "count": len(workspaces)}
+    except Exception as e:
+        logger.error("List workspaces failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/workspaces/{name}", tags=["Workspaces"])
+async def get_workspace(name: str):
+    """Get a single workspace by name."""
+    try:
+        ws_mgr = get_workspace_manager()
+        defn = ws_mgr.get(name)
+        if not defn:
+            raise HTTPException(status_code=404, detail=f"Workspace '{name}' not found.")
+        return defn.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/workspaces/{name}", tags=["Workspaces"])
+async def update_workspace(name: str, body: WorkspaceUpdateRequest):
+    """
+    Update a workspace definition.
+
+    You can update any field except `name`, `created_at`, and `created_by`.
+    """
+    try:
+        ws_mgr = get_workspace_manager()
+        updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+        updated = ws_mgr.update(name, updates)
+        return updated.to_dict()
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Update workspace failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/workspaces/{name}", tags=["Workspaces"])
+async def delete_workspace(name: str):
+    """Delete a workspace by name."""
+    try:
+        ws_mgr = get_workspace_manager()
+        ws_mgr.delete(name)
+        return {"status": "deleted", "name": name}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/workspaces/{name}/enable", tags=["Workspaces"])
+async def enable_workspace(name: str):
+    """Enable a workspace so it can be used in /invoke calls."""
+    try:
+        ws_mgr = get_workspace_manager()
+        updated = ws_mgr.enable(name)
+        return {"status": "enabled", "name": name, "workspace": updated.to_dict()}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/workspaces/{name}/disable", tags=["Workspaces"])
+async def disable_workspace(name: str):
+    """
+    Disable a workspace. Disabled workspaces cannot be used in /invoke calls.
+    """
+    try:
+        ws_mgr = get_workspace_manager()
+        updated = ws_mgr.disable(name)
+        return {"status": "disabled", "name": name, "workspace": updated.to_dict()}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Base Schemas
+# ---------------------------------------------------------------------------
+
+class KBCreateRequest(BaseModel):
+    name: str = Field(..., description="Unique slug for this knowledge base, e.g. 'product_docs'.")
+    display_name: str = Field(..., description="Human-readable name.")
+    description: str = Field(..., description="What this knowledge base contains.")
+    type: str = Field(
+        default="files",
+        description="Knowledge base type: 'files', 'database', or 'api'.",
+    )
+    config: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Connection config for database/api types.",
+    )
+    specialist_types: list = Field(
+        default_factory=list,
+        description=(
+            "Specialist types that can access this KB. "
+            "Leave empty to allow ALL specialists."
+        ),
+    )
+    workspaces: list = Field(
+        default_factory=list,
+        description="Workspace names that include this KB.",
+    )
+    enabled: bool = True
+
+
+class KBUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    type: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+    specialist_types: Optional[list] = None
+    workspaces: Optional[list] = None
+    enabled: Optional[bool] = None
+
+
+class KBSearchRequest(BaseModel):
+    query: str = Field(..., description="Search query.")
+    top_k: int = Field(default=5, description="Maximum number of results to return.")
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Base Routes
+# ---------------------------------------------------------------------------
+
+@app.post("/knowledge-bases", tags=["Knowledge Bases"], status_code=201)
+async def create_knowledge_base(body: KBCreateRequest):
+    """
+    Create a new Knowledge Base.
+
+    A Knowledge Base holds uploaded documents (PDFs, CSVs, text files, markdown)
+    that specialist agents can search at runtime. Once created, upload files
+    via ``POST /knowledge-bases/{name}/upload``.
+    """
+    try:
+        kb_mgr = get_kb_manager()
+        defn = KnowledgeBaseDefinition(
+            name=body.name,
+            display_name=body.display_name,
+            description=body.description,
+            type=body.type,
+            config=body.config,
+            specialist_types=body.specialist_types,
+            workspaces=body.workspaces,
+            enabled=body.enabled,
+        )
+        created = kb_mgr.create(defn)
+        return created.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        logger.error("Create knowledge base failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/knowledge-bases", tags=["Knowledge Bases"])
+async def list_knowledge_bases(enabled_only: bool = False):
+    """
+    List all knowledge bases.
+
+    Filter by ``enabled_only=true`` to see only active knowledge bases.
+    """
+    try:
+        kb_mgr = get_kb_manager()
+        kbs = kb_mgr.list(enabled_only=enabled_only)
+        return {"knowledge_bases": [kb.to_dict() for kb in kbs], "count": len(kbs)}
+    except Exception as e:
+        logger.error("List knowledge bases failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/knowledge-bases/{name}", tags=["Knowledge Bases"])
+async def get_knowledge_base(name: str):
+    """Get a single knowledge base by name."""
+    try:
+        kb_mgr = get_kb_manager()
+        defn = kb_mgr.get(name)
+        if not defn:
+            raise HTTPException(status_code=404, detail=f"Knowledge base '{name}' not found.")
+        return defn.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/knowledge-bases/{name}", tags=["Knowledge Bases"])
+async def update_knowledge_base(name: str, body: KBUpdateRequest):
+    """
+    Update a knowledge base definition.
+
+    You can update any field except ``name`` and ``created_at``.
+    """
+    try:
+        kb_mgr = get_kb_manager()
+        updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+        updated = kb_mgr.update(name, updates)
+        return updated.to_dict()
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Update knowledge base failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/knowledge-bases/{name}", tags=["Knowledge Bases"])
+async def delete_knowledge_base(name: str):
+    """Delete a knowledge base and all its uploaded files."""
+    try:
+        kb_mgr = get_kb_manager()
+        kb_mgr.delete(name)
+        return {"status": "deleted", "name": name}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/knowledge-bases/{name}/upload", tags=["Knowledge Bases"])
+async def upload_kb_file(name: str, file: UploadFile = File(...)):
+    """
+    Upload a file to a knowledge base.
+
+    Supported formats: PDF, CSV, TXT, MD, JSON, and other text-based files.
+    The file will be available for search immediately after upload.
+    """
+    try:
+        kb_mgr = get_kb_manager()
+        content = await file.read()
+        file_path = kb_mgr.upload_file(name, file.filename, content)
+        return {
+            "status": "uploaded",
+            "knowledge_base": name,
+            "filename": file.filename,
+            "path": file_path,
+            "size_bytes": len(content),
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Upload file to KB failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/knowledge-bases/{name}/files/{filename}", tags=["Knowledge Bases"])
+async def delete_kb_file(name: str, filename: str):
+    """Delete a single file from a knowledge base."""
+    try:
+        kb_mgr = get_kb_manager()
+        kb_mgr.delete_file(name, filename)
+        return {"status": "deleted", "knowledge_base": name, "filename": filename}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/knowledge-bases/{name}/files", tags=["Knowledge Bases"])
+async def list_kb_files(name: str):
+    """List all files in a knowledge base with metadata (size, modified date)."""
+    try:
+        kb_mgr = get_kb_manager()
+        files = kb_mgr.list_files(name)
+        return {"knowledge_base": name, "files": files, "count": len(files)}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/knowledge-bases/{name}/search", tags=["Knowledge Bases"])
+async def search_knowledge_base(name: str, body: KBSearchRequest):
+    """
+    Search a knowledge base for relevant content.
+
+    Splits uploaded files into chunks and scores them by query-term frequency.
+    Returns the top-k most relevant chunks with source file and score.
+    """
+    try:
+        kb_mgr = get_kb_manager()
+        results = kb_mgr.search(name, body.query, top_k=body.top_k)
+        return {
+            "knowledge_base": name,
+            "query": body.query,
+            "results": results,
+            "result_count": len(results),
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Search KB failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Template Routes
+# ---------------------------------------------------------------------------
+
+@app.get("/templates", tags=["Templates"])
+async def list_templates(category: Optional[str] = None):
+    """
+    List all available use-case templates.
+
+    Templates provide pre-built configurations (colonees, workspace layout,
+    MCP server suggestions, knowledge base recommendations) for common
+    use cases such as customer support, legal, finance, and more.
+
+    Optionally filter by ``category`` (e.g. ``?category=support``).
+    """
+    templates = _template_registry.list_templates(category=category)
+    return {
+        "templates": [t.to_dict() for t in templates],
+        "count": len(templates),
+    }
+
+
+@app.get("/templates/categories", tags=["Templates"])
+async def list_template_categories():
+    """
+    List all template categories with counts.
+
+    Returns ``[{name, display_name, icon, count}, ...]``.
+    """
+    categories = _template_registry.get_categories()
+    return {"categories": categories, "count": len(categories)}
+
+
+@app.get("/templates/{name}", tags=["Templates"])
+async def get_template(name: str):
+    """Get a single use-case template by slug name."""
+    tpl = _template_registry.get_template(name)
+    if not tpl:
+        raise HTTPException(status_code=404, detail=f"Template '{name}' not found.")
+    return tpl.to_dict()
+
+
+@app.post("/templates/{name}/apply", tags=["Templates"])
+async def apply_template(name: str):
+    """
+    Apply a use-case template to the platform.
+
+    This will:
+    1. Create colonees defined in the template (skipping any that already exist).
+    2. Create a workspace containing those colonees.
+    3. Create empty knowledge base placeholders for recommended data.
+    4. Return a summary of everything that was created.
+    """
+    tpl = _template_registry.get_template(name)
+    if not tpl:
+        raise HTTPException(status_code=404, detail=f"Template '{name}' not found.")
+
+    platform = await get_platform()
+    registry = platform.agent_manager.colonee_registry
+    ws_mgr = get_workspace_manager()
+    kb_mgr = get_kb_manager()
+
+    # -- 1. Create colonees ---------------------------------------------------
+    created_colonees: list = []
+    skipped_colonees: list = []
+
+    for col_def in tpl.colonees:
+        col_name = col_def["name"]
+        if registry.get(col_name):
+            skipped_colonees.append(col_name)
+            continue
+        try:
+            defn = ColoneeDefinition(
+                name=col_name,
+                display_name=col_def["display_name"],
+                description=col_def["description"],
+                specialist_type=col_def["specialist_type"],
+                system_prompt=col_def["system_prompt"],
+                capabilities=col_def.get("capabilities", []),
+                built_in_tools=col_def.get("built_in_tools", []),
+                mcp_servers=col_def.get("mcp_servers", []),
+                tags=col_def.get("tags", []),
+                created_by="template:" + tpl.name,
+            )
+            registry.create(defn)
+            created_colonees.append(col_name)
+        except Exception as e:
+            logger.warning("Template apply — failed to create colonee '%s': %s", col_name, e)
+            skipped_colonees.append(col_name)
+
+    # Sync capabilities so new colonees are available immediately
+    if created_colonees:
+        platform.agent_manager._sync_capabilities_from_registry()
+
+    # -- 2. Create workspace --------------------------------------------------
+    all_colonee_names = [c["name"] for c in tpl.colonees]
+    ws_name = tpl.name
+    workspace_created = False
+
+    if not ws_mgr.get(ws_name):
+        try:
+            ws_cfg = tpl.workspace_config
+            ws_def = WorkspaceDefinition(
+                name=ws_name,
+                display_name=ws_cfg.get("display_name", tpl.display_name),
+                description=ws_cfg.get("description", tpl.description),
+                colonees=all_colonee_names,
+                icon=ws_cfg.get("icon", tpl.icon),
+                color=ws_cfg.get("color", tpl.color),
+                created_by="template:" + tpl.name,
+            )
+            ws_mgr.create(ws_def)
+            workspace_created = True
+        except Exception as e:
+            logger.warning("Template apply — failed to create workspace '%s': %s", ws_name, e)
+
+    # -- 3. Create knowledge base placeholders --------------------------------
+    created_kbs: list = []
+
+    for idx, kb_desc in enumerate(tpl.recommended_knowledge_bases):
+        kb_slug = f"{tpl.name}_kb_{idx + 1}"
+        if kb_mgr.get(kb_slug):
+            continue
+        try:
+            kb_def = KnowledgeBaseDefinition(
+                name=kb_slug,
+                display_name=f"{tpl.display_name} KB {idx + 1}",
+                description=kb_desc,
+                type="files",
+                workspaces=[ws_name],
+            )
+            kb_mgr.create(kb_def)
+            created_kbs.append(kb_slug)
+        except Exception as e:
+            logger.warning("Template apply — failed to create KB '%s': %s", kb_slug, e)
+
+    # If workspace was created and we have KBs, update its knowledge_bases list
+    if workspace_created and created_kbs:
+        try:
+            ws_mgr.update(ws_name, {"knowledge_bases": created_kbs})
+        except Exception:
+            pass  # non-critical
+
+    return {
+        "status": "applied",
+        "template": tpl.name,
+        "colonees_created": created_colonees,
+        "colonees_skipped": skipped_colonees,
+        "workspace_created": workspace_created,
+        "workspace_name": ws_name,
+        "knowledge_bases_created": created_kbs,
+        "mcp_server_suggestions": tpl.mcp_server_suggestions,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Connector Schemas
+# ---------------------------------------------------------------------------
+
+class ConnectorCreateRequest(BaseModel):
+    name: str = Field(..., description="Unique slug for this connector, e.g. 'myapp_api'.")
+    display_name: str = Field(..., description="Human-readable name, e.g. 'MyApp API'.")
+    description: str = Field(..., description="What this connector provides.")
+    type: str = Field(
+        ...,
+        description="Connector type: 'openapi', 'repo', 'database', 'webhook', 'oauth_service'.",
+    )
+    provider: str = Field(default="custom", description="Provider slug, e.g. 'github', 'slack', 'custom'.")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Type-specific configuration.")
+    credentials: Dict[str, str] = Field(default_factory=dict, description="Authentication credentials (stored securely).")
+    workspaces: list = Field(default_factory=list, description="Workspace names this connector is scoped to (empty = all).")
+    specialist_types: list = Field(default_factory=list, description="Specialist types that receive this connector's tools (empty = all).")
+
+
+class ConnectorUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+    credentials: Optional[Dict[str, str]] = None
+    workspaces: Optional[list] = None
+    specialist_types: Optional[list] = None
+    enabled: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Connector Routes — Catalog (registered BEFORE {name} routes to avoid conflicts)
+# ---------------------------------------------------------------------------
+
+@app.get("/connectors/catalog", tags=["Connectors"])
+async def list_connector_catalog():
+    """
+    List all available connector templates from the built-in catalog.
+
+    Each entry describes a pre-configured connector for a popular service
+    (Slack, GitHub, Gmail, etc.) with its required config and credential fields.
+    """
+    catalog = ConnectorCatalog.get_catalog()
+    return {"catalog": catalog, "count": len(catalog)}
+
+
+@app.get("/connectors/catalog/categories", tags=["Connectors"])
+async def list_connector_catalog_categories():
+    """
+    List all connector catalog categories with counts.
+
+    Returns ``[{name, display_name, count}, ...]``.
+    """
+    categories = ConnectorCatalog.get_categories()
+    return {"categories": categories, "count": len(categories)}
+
+
+@app.post("/connectors/from-catalog/{catalog_id}", tags=["Connectors"], status_code=201)
+async def create_connector_from_catalog(catalog_id: str, body: ConnectorCreateRequest):
+    """
+    Create a connector from a catalog template.
+
+    The catalog entry pre-fills type, provider, and default config values.
+    You supply the name, credentials, and any overrides.
+    """
+    template = ConnectorCatalog.get_by_id(catalog_id)
+    if not template:
+        raise HTTPException(status_code=404, detail=f"Catalog entry '{catalog_id}' not found.")
+
+    try:
+        conn_mgr = get_connector_manager()
+
+        # Merge template defaults into config
+        merged_config = {}
+        for key, schema in template.get("config_schema", {}).items():
+            if schema.get("type") == "hidden" and "default" in schema:
+                merged_config[key] = schema["default"]
+            elif "default" in schema:
+                merged_config[key] = schema["default"]
+        # User overrides take precedence
+        merged_config.update(body.config)
+
+        defn = conn_mgr.create(
+            name=body.name,
+            display_name=body.display_name or template["display_name"],
+            description=body.description or template["description"],
+            type=template["type"],
+            provider=template["provider"],
+            config=merged_config,
+            credentials=body.credentials,
+            workspaces=body.workspaces,
+            specialist_types=body.specialist_types,
+        )
+        return defn.to_safe_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        logger.error("Create connector from catalog failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Connector Routes — CRUD
+# ---------------------------------------------------------------------------
+
+@app.post("/connectors", tags=["Connectors"], status_code=201)
+async def create_connector(body: ConnectorCreateRequest):
+    """
+    Create a new Connector — an authenticated connection to an external service.
+
+    Connectors auto-generate tools for specialist agents. For example, an OpenAPI
+    connector parses a Swagger spec and creates a callable tool for each endpoint.
+    A repo connector clones a Git repository and provides search/read tools.
+
+    After creating, call ``POST /connectors/{name}/connect`` to activate it.
+    """
+    try:
+        conn_mgr = get_connector_manager()
+        defn = conn_mgr.create(
+            name=body.name,
+            display_name=body.display_name,
+            description=body.description,
+            type=body.type,
+            provider=body.provider,
+            config=body.config,
+            credentials=body.credentials,
+            workspaces=body.workspaces,
+            specialist_types=body.specialist_types,
+        )
+        return defn.to_safe_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        logger.error("Create connector failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/connectors", tags=["Connectors"])
+async def list_connectors(type: Optional[str] = None, workspace: Optional[str] = None):
+    """
+    List all connectors, optionally filtered by type or workspace.
+
+    Credentials are masked in the response.
+    """
+    try:
+        conn_mgr = get_connector_manager()
+        connectors = conn_mgr.list(type_filter=type, workspace=workspace)
+        return {
+            "connectors": [c.to_safe_dict() for c in connectors],
+            "count": len(connectors),
+        }
+    except Exception as e:
+        logger.error("List connectors failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/connectors/{name}", tags=["Connectors"])
+async def get_connector(name: str):
+    """Get a single connector by name. Credentials are masked."""
+    try:
+        conn_mgr = get_connector_manager()
+        defn = conn_mgr.get(name)
+        if not defn:
+            raise HTTPException(status_code=404, detail=f"Connector '{name}' not found.")
+        return defn.to_safe_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/connectors/{name}", tags=["Connectors"])
+async def update_connector(name: str, body: ConnectorUpdateRequest):
+    """
+    Update a connector definition.
+
+    You can update any field except ``name`` and ``created_at``.
+    If credentials are updated, you may need to reconnect via
+    ``POST /connectors/{name}/connect``.
+    """
+    try:
+        conn_mgr = get_connector_manager()
+        updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+        updated = conn_mgr.update(name, **updates)
+        return updated.to_safe_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Update connector failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/connectors/{name}", tags=["Connectors"])
+async def delete_connector(name: str):
+    """Delete a connector by name."""
+    try:
+        conn_mgr = get_connector_manager()
+        conn_mgr.delete(name)
+        return {"status": "deleted", "name": name}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Connector Routes — Actions
+# ---------------------------------------------------------------------------
+
+@app.post("/connectors/{name}/connect", tags=["Connectors"])
+async def connect_connector(name: str):
+    """
+    Activate a connector — parse its spec, clone its repo, or establish its connection.
+
+    This is the key action endpoint. Depending on the connector type:
+    - **openapi**: Fetches and parses the OpenAPI/Swagger spec, generates tool names.
+    - **repo**: Clones (or pulls) the git repository, indexes files, generates tool names.
+    - **other types**: Marks the connector as connected (tools added in future updates).
+
+    On success, updates the connector's status to "connected" and populates
+    ``tools_generated`` and ``sync_stats``.
+    """
+    try:
+        conn_mgr = get_connector_manager()
+        defn = conn_mgr.get(name)
+        if not defn:
+            raise HTTPException(status_code=404, detail=f"Connector '{name}' not found.")
+
+        conn_mgr.update_status(name, "syncing", message="Connecting...")
+
+        if defn.type == "openapi":
+            return await _connect_openapi(conn_mgr, defn)
+        elif defn.type == "repo":
+            return await _connect_repo(conn_mgr, defn)
+        else:
+            # Generic: just mark as connected
+            conn_mgr.update_status(name, "connected", message=f"{defn.type} connector activated")
+            updated = conn_mgr.get(name)
+            return updated.to_safe_dict()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Connect connector '%s' failed: %s", name, e)
+        try:
+            get_connector_manager().update_status(name, "error", message=str(e))
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _connect_openapi(conn_mgr: ConnectorManager, defn):
+    """Parse OpenAPI spec and register tool names."""
+    spec_url = defn.config.get("spec_url")
+    base_url = defn.config.get("base_url")
+    auth_type = defn.config.get("auth_type", "none")
+    auth_header_name = defn.config.get("auth_header_name", "Authorization")
+    auth_value = defn.credentials.get("api_key_or_token", "")
+
+    if auth_type == "none":
+        auth_type = None
+
+    if not spec_url and not base_url:
+        conn_mgr.update_status(defn.name, "error", message="No spec_url or base_url in config")
+        raise HTTPException(status_code=400, detail="OpenAPI connector requires spec_url in config.")
+
+    try:
+        connector = OpenAPIConnector(
+            spec_url_or_dict=spec_url,
+            base_url=base_url,
+            auth_type=auth_type,
+            auth_value=auth_value,
+            auth_header_name=auth_header_name,
+        )
+        tool_names = connector.get_tool_names()
+        spec_info = connector.get_spec_info()
+
+        conn_mgr.update_status(
+            defn.name,
+            status="connected",
+            message=f"Parsed {spec_info['endpoints']} endpoints from {spec_info['title']}",
+            tools=tool_names,
+            sync_stats={
+                "endpoints_found": spec_info["endpoints"],
+                "methods_mapped": len(tool_names),
+                "api_title": spec_info["title"],
+                "api_version": spec_info["version"],
+            },
+        )
+        updated = conn_mgr.get(defn.name)
+        return updated.to_safe_dict()
+
+    except Exception as e:
+        conn_mgr.update_status(defn.name, "error", message=str(e))
+        raise HTTPException(status_code=400, detail=f"Failed to parse OpenAPI spec: {e}")
+
+
+async def _connect_repo(conn_mgr: ConnectorManager, defn):
+    """Clone/pull repo and index files."""
+    repo_url = defn.config.get("repo_url")
+    if not repo_url:
+        conn_mgr.update_status(defn.name, "error", message="No repo_url in config")
+        raise HTTPException(status_code=400, detail="Repo connector requires repo_url in config.")
+
+    branch = defn.config.get("branch", "main")
+    access_token = defn.credentials.get("access_token", "")
+    include_patterns = defn.config.get("include_patterns", [])
+    exclude_patterns = defn.config.get("exclude_patterns", [])
+    data_dir = conn_mgr.get_connector_data_dir(defn.name)
+
+    try:
+        connector = RepoConnector(
+            repo_url=repo_url,
+            data_dir=data_dir,
+            branch=branch,
+            access_token=access_token or None,
+            include_patterns=include_patterns or None,
+            exclude_patterns=exclude_patterns or None,
+        )
+        sync_stats = connector.clone_or_pull()
+        tool_names = ["search_codebase", "read_repo_file", "list_repo_files", "get_repo_structure"]
+
+        conn_mgr.update_status(
+            defn.name,
+            status="connected",
+            message=f"Indexed {sync_stats['files_indexed']} files",
+            tools=tool_names,
+            sync_stats=sync_stats,
+        )
+        updated = conn_mgr.get(defn.name)
+        return updated.to_safe_dict()
+
+    except Exception as e:
+        conn_mgr.update_status(defn.name, "error", message=str(e))
+        raise HTTPException(status_code=400, detail=f"Failed to connect repo: {e}")
+
+
+@app.post("/connectors/{name}/sync", tags=["Connectors"])
+async def sync_connector(name: str):
+    """
+    Re-sync a connector — re-fetch the OpenAPI spec or re-pull the git repository.
+
+    This is equivalent to ``/connect`` but semantically indicates a refresh
+    of an already-connected connector.
+    """
+    return await connect_connector(name)
+
+
+@app.get("/connectors/{name}/tools", tags=["Connectors"])
+async def list_connector_tools(name: str):
+    """
+    List the auto-generated tool names for a connected connector.
+
+    Tools are generated when the connector is activated via ``/connect``.
+    """
+    try:
+        conn_mgr = get_connector_manager()
+        defn = conn_mgr.get(name)
+        if not defn:
+            raise HTTPException(status_code=404, detail=f"Connector '{name}' not found.")
+        return {
+            "connector": name,
+            "status": defn.status,
+            "tools": defn.tools_generated,
+            "count": len(defn.tools_generated),
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

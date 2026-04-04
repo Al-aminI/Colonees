@@ -95,6 +95,8 @@ class SpecialistAgentFactory:
         agent_directory=None,
         mcp_manager=None,
         colonee_registry=None,
+        connector_manager=None,
+        kb_manager=None,
     ) -> BaseSpecialistAgent:
         """Create specialist agent of specified type."""
 
@@ -128,6 +130,8 @@ class SpecialistAgentFactory:
                     definition=defn,
                     agent_manager=agent_manager,
                     mcp_manager=mcp_manager,
+                    connector_manager=connector_manager,
+                    kb_manager=kb_manager,
                 )
 
         raise ValueError(

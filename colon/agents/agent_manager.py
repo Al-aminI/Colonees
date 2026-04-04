@@ -37,10 +37,14 @@ class CologeesAgentManager:
         memory_manager: CologeesMemoryManager,
         agent_directory: 'AgentDirectory',
         config: CologeesConfig,
+        connector_manager=None,
+        kb_manager=None,
     ):
         self.memory_manager = memory_manager
         self.agent_directory = agent_directory
         self.config = config
+        self.connector_manager = connector_manager
+        self.kb_manager = kb_manager
         self.mcp = MCPManager()
         self.colonee_registry = ColoneeRegistry()
 
@@ -143,6 +147,8 @@ class CologeesAgentManager:
             agent_directory=self.agent_directory,
             mcp_manager=self.mcp,
             colonee_registry=self.colonee_registry,
+            connector_manager=self.connector_manager,
+            kb_manager=self.kb_manager,
         )
 
         self.active_specialist_agents[specialist_agent.agent_id] = specialist_agent

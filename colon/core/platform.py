@@ -79,12 +79,24 @@ class ColoneesPlatform:
             self.agent_directory = AgentDirectory()
             logger.info("Agent Directory initialized")
 
+            # Lazily import connector and KB managers so the platform
+            # wires them into agent spawning automatically.
+            from colon.connectors.connector_registry import ConnectorManager
+            from colon.core.knowledge_base import KnowledgeBaseManager
+            import os
+
+            storage_dir = os.getenv("COLONEES_STORAGE_DIR", "colonees_files")
+            connector_manager = ConnectorManager(storage_dir=storage_dir)
+            kb_manager = KnowledgeBaseManager(storage_dir=storage_dir)
+
             self.agent_manager = CologeesAgentManager(
                 memory_manager=self.memory_manager,
                 agent_directory=self.agent_directory,
-                config=self.config
+                config=self.config,
+                connector_manager=connector_manager,
+                kb_manager=kb_manager,
             )
-            logger.info("Agent Manager initialized")
+            logger.info("Agent Manager initialized (with connector + KB managers)")
 
             self.resource_manager = CologeesResourceManager(config=self.config)
             logger.info("Resource Manager initialized")
