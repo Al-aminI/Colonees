@@ -7,9 +7,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select } from '@/components/ui/select'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
-const schema = z.object({
+export const mcpServerSchema = z.object({
   name: z.string().regex(/^[a-z0-9_-]+$/, 'Only lowercase letters, numbers, hyphens, underscores').min(2),
   transport: z.enum(['streamable_http', 'sse', 'stdio']),
   url: z.string().optional(),
@@ -20,20 +20,34 @@ const schema = z.object({
   specialist_types_str: z.string().optional(),
 })
 
-type FormValues = z.infer<typeof schema>
+export type McpServerFormValues = z.infer<typeof mcpServerSchema>
+
+interface McpServerPreset {
+  id?: string
+  name?: string
+  display_name?: string
+  description?: string
+  transport?: 'streamable_http' | 'sse' | 'stdio'
+  url?: string
+  command?: string
+  args?: string[]
+  env_example?: string
+  headers_example?: string
+}
 
 interface McpServerFormProps {
   open: boolean
   onClose: () => void
-  onSubmit: (values: FormValues) => Promise<void>
+  onSubmit: (values: McpServerFormValues) => Promise<void>
+  preset?: McpServerPreset | null
 }
 
-export function McpServerForm({ open, onClose, onSubmit }: McpServerFormProps) {
+export function McpServerForm({ open, onClose, onSubmit, preset }: McpServerFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [jsonError, setJsonError] = useState('')
 
-  const { register, handleSubmit, watch, reset, formState: { errors } } = useForm<FormValues>({
-    resolver: zodResolver(schema),
+  const { register, handleSubmit, watch, reset, setValue, formState: { errors } } = useForm<McpServerFormValues>({
+    resolver: zodResolver(mcpServerSchema),
     defaultValues: { transport: 'streamable_http' },
   })
 
@@ -41,10 +55,23 @@ export function McpServerForm({ open, onClose, onSubmit }: McpServerFormProps) {
   const isHttp = transport === 'streamable_http' || transport === 'sse'
   const isStdio = transport === 'stdio'
 
+  useEffect(() => {
+    if (!open || !preset) return
+    reset({
+      name: preset.name ?? '',
+      transport: preset.transport ?? 'streamable_http',
+      url: preset.url ?? '',
+      headers_json: preset.headers_example ?? '',
+      command: preset.command ?? '',
+      args_str: preset.args?.join(' ') ?? '',
+      env_json: preset.env_example ?? '',
+      specialist_types_str: '',
+    })
+  }, [open, preset, reset])
+
   const handleClose = () => { reset(); setJsonError(''); onClose() }
 
-  const handleFormSubmit = async (values: FormValues) => {
-    // Validate JSON fields
+  const handleFormSubmit = async (values: McpServerFormValues) => {
     if (values.headers_json) {
       try { JSON.parse(values.headers_json) } catch { setJsonError('Invalid JSON in headers'); return }
     }
@@ -63,7 +90,13 @@ export function McpServerForm({ open, onClose, onSubmit }: McpServerFormProps) {
 
   return (
     <Dialog open={open} onClose={handleClose}>
-      <DialogHeader title="Register MCP Server" onClose={handleClose} />
+      <DialogHeader
+        title={preset?.display_name ? `Register ${preset.display_name} MCP Server` : 'Register MCP Server'}
+        onClose={handleClose}
+      />
+      {preset?.description && (
+        <p className="text-sm text-muted-foreground -mt-2 mb-2">{preset.description}</p>
+      )}
       <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4">
         <div>
           <Label>Name</Label>
@@ -103,11 +136,11 @@ export function McpServerForm({ open, onClose, onSubmit }: McpServerFormProps) {
           <>
             <div>
               <Label>Command</Label>
-              <Input {...register('command')} placeholder="python" className="mt-1" />
+              <Input {...register('command')} placeholder="npx" className="mt-1" />
             </div>
             <div>
               <Label>Args (space-separated)</Label>
-              <Input {...register('args_str')} placeholder="server.py --port 8080" className="mt-1" />
+              <Input {...register('args_str')} placeholder="-y @anthropic/mcp-server-postgres" className="mt-1" />
             </div>
             <div>
               <Label>Environment Variables (JSON)</Label>

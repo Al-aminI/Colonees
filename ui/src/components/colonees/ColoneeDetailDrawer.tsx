@@ -60,9 +60,32 @@ export function ColoneeDetailDrawer({ colonee, onClose }: ColoneeDetailDrawerPro
             <dl className="space-y-1 text-xs text-muted-foreground">
               <div className="flex justify-between"><dt>Max Tool Calls</dt><dd>{colonee.constraints.max_tool_calls}</dd></div>
               <div className="flex justify-between"><dt>Max Runtime</dt><dd>{colonee.constraints.max_runtime_seconds}s</dd></div>
+              <div className="flex justify-between"><dt>Output Format</dt><dd>{colonee.constraints.output_format ?? 'free'}</dd></div>
             </dl>
           </div>
         </div>
+
+        {colonee.constraints.forbidden_topics.length > 0 && (
+          <div>
+            <h3 className="font-semibold mb-1">Forbidden Topics</h3>
+            <div className="flex flex-wrap gap-1">
+              {colonee.constraints.forbidden_topics.map((t) => (
+                <Badge key={t} variant="destructive">{t}</Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {colonee.evaluation.custom_criteria.length > 0 && (
+          <div>
+            <h3 className="font-semibold mb-1">Custom Evaluation Criteria</h3>
+            <div className="flex flex-wrap gap-1">
+              {colonee.evaluation.custom_criteria.map((c) => (
+                <Badge key={c} variant="secondary">{c}</Badge>
+              ))}
+            </div>
+          </div>
+        )}
 
         {(colonee.built_in_tools.length > 0 || colonee.mcp_servers.length > 0) && (
           <div>

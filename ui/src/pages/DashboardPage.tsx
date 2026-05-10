@@ -54,8 +54,7 @@ export function DashboardPage() {
       <div>
         <PageHeader title="Dashboard" />
         <p className="text-muted-foreground text-sm">
-          Could not reach the backend. Make sure the server is running at{' '}
-          <code className="rounded bg-muted px-1">localhost:8080</code>.
+          Could not reach the backend. Make sure the Colonees server is running.
         </p>
       </div>
     )

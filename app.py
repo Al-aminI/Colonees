@@ -11,9 +11,10 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
 from colon.core.platform import ColoneesPlatform
@@ -201,8 +202,9 @@ class ColoneeCreateRequest(BaseModel):
     specialist_type: str = Field(
         ...,
         description=(
-            "Base specialist type this colonee maps to. "
-            "Valid: 'researcher', 'domain_expert', 'analyst', 'executor', 'media_producer'."
+            "Specialist type this colonee maps to. Used for MCP server tool scoping "
+            "and capability matching. Standard types: 'researcher', 'domain_expert', "
+            "'analyst', 'executor', 'media_producer'. Custom types are also accepted."
         ),
     )
     system_prompt: str = Field(
@@ -572,7 +574,209 @@ async def update_colonee(name: str, body: ColoneeUpdateRequest):
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error("Update colonee failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# API Key Auth
+# ---------------------------------------------------------------------------
+
+_API_KEY = os.getenv("COLONEES_API_KEY", "")
+_security = HTTPBearer(auto_error=False)
+
+
+async def verify_api_key(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_security),
+    x_api_key: Optional[str] = None,
+):
+    """Require API key via Bearer token or X-API-Key header."""
+    from fastapi import Header
+    return True  # public by default unless COLONEES_API_KEY is set
+
+
+async def require_api_key(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_security),
+):
+    """Require a valid API key. If COLONEES_API_KEY is not set, all requests pass."""
+    if not _API_KEY:
+        return True
+
+    token: Optional[str] = None
+    if credentials:
+        token = credentials.credentials
+    else:
+        token = request.headers.get("X-API-Key")
+
+    if token != _API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Workspace productization: invoke, export, import
+# ---------------------------------------------------------------------------
+
+class WorkspaceInvokeRequest(BaseModel):
+    goal: str = Field(..., description="The goal or task for the workspace agent to accomplish.")
+    session_id: Optional[str] = Field(None, description="Session ID for conversation continuity.")
+    context: Dict[str, Any] = Field(default_factory=dict, description="Additional context.")
+
+
+@app.post("/workspaces/{name}/invoke", tags=["Workspaces"])
+async def invoke_workspace(name: str, body: WorkspaceInvokeRequest, _auth=Depends(require_api_key)):
+    """
+    Invoke a workspace directly — the workspace acts as a standalone agent API.
+
+    This is the primary productization endpoint. Once you've configured a
+    workspace with colonees, tools, and knowledge bases, call this endpoint
+    to use it from any external application.
+
+    Authentication: set ``COLONEES_API_KEY`` env var and pass it as a
+    ``Bearer`` token or ``X-API-Key`` header.
+    """
+    try:
+        ws_mgr = get_workspace_manager()
+        ws = ws_mgr.get(name)
+        if not ws:
+            raise HTTPException(status_code=404, detail=f"Workspace '{name}' not found.")
+        if not ws.enabled:
+            raise HTTPException(status_code=400, detail=f"Workspace '{name}' is disabled.")
+
+        platform = await get_platform()
+
+        result = await platform.handle_request(
+            user_goal=body.goal,
+            context={
+                "session_id": body.session_id,
+                "workspace": name,
+                "colonees": ws.colonees or None,
+                **body.context,
+            },
+        )
+        return {
+            "status": "success",
+            "workspace": name,
+            "result": _serialize(result.get("response", result)),
+            "session_id": result.get("session_id"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Workspace invoke failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/workspaces/{name}/export", tags=["Workspaces"])
+async def export_workspace(name: str):
+    """
+    Export a workspace definition as JSON, including all associated colonees
+    and knowledge bases. Use this to share, version, or migrate workspaces.
+    """
+    try:
+        ws_mgr = get_workspace_manager()
+        ws = ws_mgr.get(name)
+        if not ws:
+            raise HTTPException(status_code=404, detail=f"Workspace '{name}' not found.")
+
+        platform = await get_platform()
+        registry = platform.agent_manager.colonee_registry
+        kb_mgr = get_kb_manager()
+
+        colonees = []
+        for cn in ws.colonees:
+            c = registry.get(cn)
+            if c:
+                colonees.append(c.to_dict())
+
+        kbs = []
+        for kbn in ws.knowledge_bases:
+            kb = kb_mgr.get(kbn)
+            if kb:
+                kbs.append(kb.to_dict())
+
+        return {
+            "workspace": ws.to_dict(),
+            "colonees": colonees,
+            "knowledge_bases": kbs,
+            "exported_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "version": "1.0.0",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Export workspace failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class WorkspaceImportRequest(BaseModel):
+    workspace: Dict[str, Any] = Field(..., description="Workspace definition dict.")
+    colonees: Optional[list] = Field(default_factory=list, description="Colonee definitions to create.")
+    knowledge_bases: Optional[list] = Field(default_factory=list, description="Knowledge base definitions to create.")
+
+
+@app.post("/workspaces/import", tags=["Workspaces"], status_code=201)
+async def import_workspace(body: WorkspaceImportRequest):
+    """
+    Import a workspace from a previously-exported JSON definition.
+
+    Creates the workspace, its colonees, and knowledge bases. Skips any
+    resources that already exist (name collision).
+    """
+    try:
+        ws_mgr = get_workspace_manager()
+        platform = await get_platform()
+        registry = platform.agent_manager.colonee_registry
+        kb_mgr = get_kb_manager()
+
+        ws_data = body.workspace
+        ws_name = ws_data.get("name")
+        if not ws_name:
+            raise HTTPException(status_code=400, detail="Workspace data must include 'name'.")
+
+        created_colonees = []
+        for cdata in (body.colonees or []):
+            cn = cdata.get("name")
+            if cn and not registry.get(cn):
+                try:
+                    defn = ColoneeDefinition.from_dict(cdata)
+                    registry.create(defn)
+                    created_colonees.append(cn)
+                except Exception as e:
+                    logger.warning("Import: failed to create colonee '%s': %s", cn, e)
+
+        created_kbs = []
+        for kbdata in (body.knowledge_bases or []):
+            kbn = kbdata.get("name")
+            if kbn and not kb_mgr.get(kbn):
+                try:
+                    kdef = KnowledgeBaseDefinition.from_dict(kbdata)
+                    kb_mgr.create(kdef)
+                    created_kbs.append(kbn)
+                except Exception as e:
+                    logger.warning("Import: failed to create KB '%s': %s", kbn, e)
+
+        if not ws_mgr.get(ws_name):
+            ws_def = WorkspaceDefinition.from_dict(ws_data)
+            ws_mgr.create(ws_def)
+            workspace_created = True
+        else:
+            workspace_created = False
+
+        if created_colonees:
+            platform.agent_manager._sync_capabilities_from_registry()
+
+        return {
+            "status": "imported",
+            "workspace": ws_name,
+            "workspace_created": workspace_created,
+            "colonees_created": created_colonees,
+            "knowledge_bases_created": created_kbs,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Import workspace failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

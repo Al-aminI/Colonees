@@ -44,7 +44,13 @@ export function useClearSession() {
 }
 
 export function useInvoke() {
+  const qc = useQueryClient()
   return useMutation({
     mutationFn: (payload: InvokePayload) => sessionsApi.invoke(payload),
+    onSuccess: (_data, variables) => {
+      if (variables.session_id) {
+        qc.invalidateQueries({ queryKey: ['sessions', 'history', variables.session_id] })
+      }
+    },
   })
 }

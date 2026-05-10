@@ -42,9 +42,14 @@ wheels/
 *.egg
 
 # Virtual environments
+.venv/
 venv/
 ENV/
 env/
+
+# Node
+ui/node_modules/
+ui/dist/
 
 # IDE
 .vscode/

@@ -15,7 +15,7 @@ import { Switch } from '@/components/ui/switch'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogHeader } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
-import { Plus, FolderOpen, Trash2, Play, Search, LayoutTemplate, Sparkles, Bot, Server, Database } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Play, Search, LayoutTemplate, Sparkles, Bot, Server, Database, Upload } from 'lucide-react'
 import {
   useWorkspaces,
   useCreateWorkspace,
@@ -23,7 +23,6 @@ import {
   useToggleWorkspace,
 } from '@/hooks/useWorkspaces'
 import { useColoneesList } from '@/hooks/useColonees'
-import { useMcpServers } from '@/hooks/useMcpServers'
 import { useKnowledgeBases } from '@/hooks/useKnowledgeBases'
 import { useTemplates, useTemplateCategories, useApplyTemplate } from '@/hooks/useTemplates'
 import { useToast } from '@/components/ui/toast'
@@ -36,7 +35,6 @@ const workspaceFormSchema = z.object({
   icon: z.string().optional(),
   color: z.string().optional(),
   colonee: z.string().optional(),
-  mcp_servers: z.array(z.string()),
   knowledge_bases: z.array(z.string()),
   enabled: z.boolean(),
 })
@@ -104,6 +102,28 @@ export function WorkspacesPage() {
             <Button variant="outline" onClick={() => setShowTemplates(true)}>
               <LayoutTemplate className="h-4 w-4 mr-2" /> From Template
             </Button>
+            <Button variant="outline" onClick={async () => {
+              const input = document.createElement('input')
+              input.type = 'file'; input.accept = '.json'
+              input.onchange = async (e) => {
+                const file = (e.target as HTMLInputElement).files?.[0]
+                if (!file) return
+                try {
+                  const text = await file.text()
+                  const data = JSON.parse(text)
+                  const { workspacesApi } = await import('@/api/workspaces')
+                  await workspacesApi.import(data)
+                  toast({ title: 'Workspace imported', variant: 'success' })
+                  // Reload list
+                  window.location.reload()
+                } catch (err) {
+                  toast({ title: 'Import failed', description: err instanceof Error ? err.message : 'Invalid file', variant: 'error' })
+                }
+              }
+              input.click()
+            }}>
+              <Upload className="h-4 w-4 mr-2" /> Import
+            </Button>
             <Button onClick={() => setShowCreate(true)}>
               <Plus className="h-4 w-4 mr-2" /> New Workspace
             </Button>
@@ -167,7 +187,6 @@ export function WorkspacesPage() {
             icon: values.icon || undefined,
             color: values.color || undefined,
             colonees: [values.colonee].filter(Boolean) as string[],
-            mcp_servers: values.mcp_servers,
             knowledge_bases: values.knowledge_bases,
             enabled: values.enabled,
           })
@@ -232,9 +251,6 @@ function WorkspaceCard({
             {workspace.colonees[0] || 'No agent'}
           </Badge>
           <Badge variant="secondary">
-            {workspace.mcp_servers.length} MCP
-          </Badge>
-          <Badge variant="secondary">
             {workspace.knowledge_bases.length} KB
           </Badge>
         </div>
@@ -269,12 +285,10 @@ function CreateWorkspaceDialog({
   onCreate: (values: WorkspaceFormValues) => Promise<void>
 }) {
   const { data: coloneeData } = useColoneesList()
-  const { data: mcpData } = useMcpServers()
   const { data: kbData } = useKnowledgeBases()
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const colonees = coloneeData?.colonees ?? []
-  const mcpServers = mcpData?.servers ?? []
   const knowledgeBases = kbData?.knowledge_bases ?? []
 
   const {
@@ -288,13 +302,11 @@ function CreateWorkspaceDialog({
     resolver: zodResolver(workspaceFormSchema),
     defaultValues: {
       colonee: '',
-      mcp_servers: [],
       knowledge_bases: [],
       enabled: true,
     },
   })
 
-  const selectedMcp = watch('mcp_servers') ?? []
   const selectedKB = watch('knowledge_bases') ?? []
 
   const handleClose = () => {
@@ -383,37 +395,6 @@ function CreateWorkspaceDialog({
                 ))}
               </Select>
               <p className="text-xs text-muted-foreground mt-1">The specialist agent that will handle all tasks in this workspace</p>
-            </div>
-          </section>
-        )}
-
-        {/* MCP Servers */}
-        {mcpServers.length > 0 && (
-          <section>
-            <h3 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wide">
-              MCP Servers
-            </h3>
-            <div className="grid grid-cols-2 gap-2">
-              {mcpServers.map((s) => (
-                <label key={s.name} className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={selectedMcp.includes(s.name)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setValue('mcp_servers', [...selectedMcp, s.name])
-                      } else {
-                        setValue(
-                          'mcp_servers',
-                          selectedMcp.filter((n) => n !== s.name),
-                        )
-                      }
-                    }}
-                    className="rounded"
-                  />
-                  <span>{s.name}</span>
-                </label>
-              ))}
             </div>
           </section>
         )}

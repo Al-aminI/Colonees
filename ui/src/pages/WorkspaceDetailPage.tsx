@@ -13,36 +13,12 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/componen
 import { Dialog, DialogHeader } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { McpServerCard } from '@/components/mcp/McpServerCard'
 import {
-  ArrowLeft,
-  Play,
-  Pencil,
-  Trash2,
-  Plus,
-  Bot,
-  Plug,
-  Database,
-  Upload,
-  FileText,
-  Search,
-  X,
-  Power,
-  RefreshCw,
-  Wrench,
-  ChevronDown,
-  ChevronRight,
-  Globe,
-  GitBranch,
-  MessageSquare,
-  Send,
-  Mail,
-  HardDrive,
-  Cloud,
-  BookOpen,
-  ListChecks,
-  LayoutList,
-  Webhook,
+  ArrowLeft, Play, Pencil, Trash2, Plus, Bot, Plug, Database,
+  Upload, FileText, Search, X, Power, RefreshCw, Wrench,
+  ChevronDown, ChevronRight, Globe, GitBranch, MessageSquare,
+  Send, Mail, HardDrive, Cloud, BookOpen, ListChecks, LayoutList,
+  Webhook, Copy, Download, Upload as UploadIcon, Code, ExternalLink,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -271,10 +247,6 @@ function OverviewTab({
                   {workspace.colonees.length} colonee{workspace.colonees.length !== 1 ? 's' : ''}
                 </Badge>
                 <Badge variant="secondary">
-                  <Plug className="h-3 w-3 mr-1" />
-                  {workspace.mcp_servers.length} connector{workspace.mcp_servers.length !== 1 ? 's' : ''}
-                </Badge>
-                <Badge variant="secondary">
                   <Database className="h-3 w-3 mr-1" />
                   {workspace.knowledge_bases.length} knowledge base{workspace.knowledge_bases.length !== 1 ? 's' : ''}
                 </Badge>
@@ -309,6 +281,87 @@ function OverviewTab({
         </Button>
         <Button variant="destructive" onClick={onDelete}>
           <Trash2 className="h-4 w-4 mr-2" /> Delete
+        </Button>
+      </div>
+
+      {/* API Endpoint */}
+      <Card className="border-blue-500/30 bg-blue-500/5">
+        <CardContent className="p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <Code className="h-4 w-4 text-blue-400" />
+            <h3 className="text-sm font-semibold">Workspace API Endpoint</h3>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Invoke this workspace from any external application. The workspace acts as a
+            standalone agent API — POST a goal and get results.
+          </p>
+          <div className="rounded-md bg-background border border-border p-3 font-mono text-xs">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-muted-foreground">POST</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => {
+                  navigator.clipboard.writeText(
+                    `curl -X POST "${window.location.origin}/api/workspaces/${workspace.name}/invoke" \\\n  -H "Content-Type: application/json" \\\n  -H "X-API-Key: your-api-key" \\\n  -d '{"goal": "Your task here"}'`
+                  )
+                  toast({ title: 'Copied', variant: 'success' })
+                }}
+              >
+                <Copy className="h-3 w-3" />
+              </Button>
+            </div>
+            <code className="text-blue-400">
+              /workspaces/{workspace.name}/invoke
+            </code>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Set <code className="rounded bg-muted px-1">COLONEES_API_KEY</code> in your environment
+            and pass it as <code className="rounded bg-muted px-1">X-API-Key</code> header or
+            <code className="rounded bg-muted px-1"> Bearer</code> token.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Export / Import */}
+      <div className="flex gap-3">
+        <Button variant="outline" size="sm" onClick={async () => {
+          try {
+            const { workspacesApi } = await import('@/api/workspaces')
+            const data = await workspacesApi.export(workspace.name)
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url; a.download = `${workspace.name}.colonees.json`; a.click()
+            URL.revokeObjectURL(url)
+            toast({ title: 'Workspace exported', variant: 'success' })
+          } catch (err) {
+            toast({ title: 'Export failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'error' })
+          }
+        }}>
+          <Download className="h-3.5 w-3.5 mr-1" /> Export
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => {
+          const input = document.createElement('input')
+          input.type = 'file'; input.accept = '.json'
+          input.onchange = async (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0]
+            if (!file) return
+            try {
+              const text = await file.text()
+              const data = JSON.parse(text)
+              const { workspacesApi } = await import('@/api/workspaces')
+              await workspacesApi.import(data)
+              toast({ title: 'Workspace imported', variant: 'success' })
+              window.location.reload()
+            } catch (err) {
+              toast({ title: 'Import failed', description: err instanceof Error ? err.message : 'Invalid file', variant: 'error' })
+            }
+          }
+          input.click()
+        }}>
+          <UploadIcon className="h-3.5 w-3.5 mr-1" /> Import
         </Button>
       </div>
 
@@ -384,7 +437,7 @@ function ConnectorsTab({
 
   const allConnectors = connectorData?.connectors ?? []
   const workspaceConnectors = allConnectors.filter(c =>
-    workspace.mcp_servers.includes(c.name) || c.workspaces.includes(workspace.name),
+    c.workspaces.includes(workspace.name),
   )
 
   const handleDelete = async (name: string) => {

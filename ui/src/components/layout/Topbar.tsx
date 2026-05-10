@@ -3,7 +3,11 @@ import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 
 export function Topbar() {
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'))
+  const [dark, setDark] = useState(() => {
+    const stored = localStorage.getItem('colonees:theme')
+    if (stored !== null) return stored === 'dark'
+    return document.documentElement.classList.contains('dark')
+  })
 
   useEffect(() => {
     if (dark) {
@@ -11,6 +15,7 @@ export function Topbar() {
     } else {
       document.documentElement.classList.remove('dark')
     }
+    localStorage.setItem('colonees:theme', dark ? 'dark' : 'light')
   }, [dark])
 
   return (

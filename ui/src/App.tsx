@@ -8,6 +8,8 @@ import { ColoneesPage }         from '@/pages/ColoneesPage'
 import { KnowledgeBasePage }    from '@/pages/KnowledgeBasePage'
 import { PlaygroundPage }       from '@/pages/PlaygroundPage'
 import { SettingsPage }         from '@/pages/SettingsPage'
+import { SessionsPage }         from '@/pages/SessionsPage'
+import { TemplatesPage }        from '@/pages/TemplatesPage'
 
 export default function App() {
   return (
@@ -17,10 +19,12 @@ export default function App() {
         <Route path="dashboard"        element={<DashboardPage />} />
         <Route path="workspaces"       element={<WorkspacesPage />} />
         <Route path="workspaces/:name" element={<WorkspaceDetailPage />} />
-        <Route path="connectors"       element={<ConnectorsPage />} />
         <Route path="agents"           element={<ColoneesPage />} />
+        <Route path="connectors"       element={<ConnectorsPage />} />
         <Route path="knowledge"        element={<KnowledgeBasePage />} />
         <Route path="playground"       element={<PlaygroundPage />} />
+        <Route path="sessions"         element={<SessionsPage />} />
+        <Route path="templates"       element={<TemplatesPage />} />
         <Route path="settings"         element={<SettingsPage />} />
       </Route>
     </Routes>

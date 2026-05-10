@@ -10,6 +10,8 @@ import {
   Play,
   Settings,
   Zap,
+  History,
+  LayoutTemplate,
 } from 'lucide-react'
 
 const navItems = [
@@ -19,6 +21,8 @@ const navItems = [
   { to: '/connectors', icon: Plug, label: 'Connectors' },
   { to: '/knowledge', icon: Database, label: 'Knowledge' },
   { to: '/playground', icon: Play, label: 'Playground' },
+  { to: '/sessions', icon: History, label: 'Sessions' },
+  { to: '/templates', icon: LayoutTemplate, label: 'Templates' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
@@ -64,7 +68,7 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="px-4 py-3 border-t border-border">
-        <p className="text-xs text-muted-foreground">v0.1.0 · Agent Swarm Platform</p>
+        <p className="text-xs text-muted-foreground">v1.0.0 · Agent Swarm Platform</p>
       </div>
     </aside>
   )

@@ -22,7 +22,7 @@ function formValuesToPayload(values: ColoneeFormValues, existing?: ColoneeDefini
     name: values.name,
     display_name: values.display_name,
     description: values.description,
-    specialist_type: values.specialist_type,
+    specialist_type: values.name,
     system_prompt: values.system_prompt,
     capabilities: values.capabilities.filter(Boolean),
     built_in_tools: values.built_in_tools,
@@ -37,14 +37,14 @@ function formValuesToPayload(values: ColoneeFormValues, existing?: ColoneeDefini
     constraints: {
       max_tool_calls: values.constraints_max_tool_calls,
       max_runtime_seconds: values.constraints_max_runtime_seconds,
-      forbidden_topics: existing?.constraints.forbidden_topics ?? [],
-      output_format: existing?.constraints.output_format ?? null,
+      forbidden_topics: (values.forbidden_topics ?? existing?.constraints.forbidden_topics ?? []),
+      output_format: values.constraints_output_format === 'free' ? null : values.constraints_output_format,
     },
     evaluation: {
       quality_threshold: values.evaluation_quality_threshold,
       require_sources: values.evaluation_require_sources,
       require_structured_output: values.evaluation_require_structured_output,
-      custom_criteria: existing?.evaluation.custom_criteria ?? [],
+      custom_criteria: (values.custom_criteria ?? existing?.evaluation.custom_criteria ?? []),
     },
   }
 }

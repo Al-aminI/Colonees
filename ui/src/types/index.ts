@@ -27,12 +27,7 @@ export interface PlatformStatus {
 
 // ── Colonees ───────────────────────────────────────────────────────────────
 
-export type SpecialistType =
-  | 'researcher'
-  | 'domain_expert'
-  | 'analyst'
-  | 'executor'
-  | 'media_producer'
+export type SpecialistType = string
 
 export type BuiltInTool = 'file' | 'computation' | 'research' | 'media'
 
@@ -147,7 +142,6 @@ export interface WorkspaceDefinition {
   display_name: string
   description: string
   colonees: string[]
-  mcp_servers: string[]
   knowledge_bases: string[]
   icon: string
   color: string
@@ -162,7 +156,6 @@ export interface CreateWorkspacePayload {
   display_name: string
   description: string
   colonees?: string[]
-  mcp_servers?: string[]
   knowledge_bases?: string[]
   icon?: string
   color?: string
