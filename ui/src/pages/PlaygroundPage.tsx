@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { ChatMessage, type ChatMessageData } from '@/components/playground/ChatMessage'
 import { ChatInput } from '@/components/playground/ChatInput'
 import { MessageBubble } from '@/components/sessions/MessageBubble'
@@ -8,8 +8,9 @@ import { Select } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Copy, History, Plus, Trash2, X } from 'lucide-react'
 import { useInvoke, addStoredSession, getStoredSessions, removeStoredSession, useSessionHistory, useClearSession } from '@/hooks/useSessions'
+import { useStreamInvoke, type StreamEvent } from '@/hooks/useStreamInvoke'
 import { useWorkspaces } from '@/hooks/useWorkspaces'
-import { generateSessionId, formatResult } from '@/lib/utils'
+import { generateSessionId } from '@/lib/utils'
 import { useToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 
@@ -22,12 +23,11 @@ export function PlaygroundPage() {
   const [viewingSession, setViewingSession] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const invoke = useInvoke()
+  const { streamInvoke, abort } = useStreamInvoke()
   const { data: workspaceData } = useWorkspaces({ enabled_only: true })
   const { toast } = useToast()
   const workspaces = workspaceData?.workspaces ?? []
 
-  // History panel data
   const { data: historyData, isLoading: historyLoading } = useSessionHistory(viewingSession ?? '', 100)
   const clearSession = useClearSession()
 
@@ -39,35 +39,67 @@ export function PlaygroundPage() {
     if (showHistory) setHistorySessions(getStoredSessions())
   }, [showHistory])
 
-  const handleSend = async (goal: string) => {
+  const handleSend = useCallback(async (goal: string) => {
     const userMsg: ChatMessageData = { role: 'user', content: goal }
-    const loadingMsg: ChatMessageData = { role: 'assistant', content: '', isLoading: true }
+    const streamMsg: ChatMessageData = {
+      role: 'assistant',
+      content: '',
+      isStreaming: true,
+      streamEvents: [],
+    }
 
-    setMessages(prev => [...prev, userMsg, loadingMsg])
+    setMessages((prev) => {
+      const next = [...prev, userMsg, streamMsg]
+      return next
+    })
+    const msgIndex = messages.length + 1
     addStoredSession(sessionId)
 
-    try {
-      const result = await invoke.mutateAsync({
-        goal,
-        session_id: sessionId,
-        workspace: selectedWorkspace || undefined,
-      })
+    const events: StreamEvent[] = []
+    let content = ''
 
-      setMessages(prev => [
-        ...prev.slice(0, -1),
-        { role: 'assistant', content: formatResult(result.result) },
-      ])
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Unknown error'
-      setMessages(prev => [
-        ...prev.slice(0, -1),
-        { role: 'assistant', content: `Error: ${errMsg}` },
-      ])
-      toast({ title: 'Request failed', description: errMsg, variant: 'error' })
+    await streamInvoke(goal, sessionId, selectedWorkspace || undefined, (event) => {
+      events.push(event)
+      if (event.type === 'text' && event.content) {
+        content += event.content
+      }
+
+      setMessages((prev) => {
+        const next = [...prev]
+        const idx = msgIndex
+        if (next[idx]) {
+          next[idx] = {
+            role: 'assistant',
+            content: content,
+            isStreaming: event.type !== 'done' && event.type !== 'error',
+            streamEvents: [...events],
+          }
+        }
+        return next
+      })
+    })
+
+    setMessages((prev) => {
+      const next = [...prev]
+      if (next[msgIndex]) {
+        next[msgIndex] = {
+          role: 'assistant',
+          content: content,
+          isStreaming: false,
+          streamEvents: events.filter((e) => e.type !== 'error'),
+        }
+      }
+      return next
+    })
+
+    const errorEvent = events.find((e) => e.type === 'error')
+    if (errorEvent) {
+      toast({ title: 'Request failed', description: errorEvent.message, variant: 'error' })
     }
-  }
+  }, [sessionId, selectedWorkspace, streamInvoke, messages.length, toast])
 
   const startNewSession = () => {
+    abort()
     setSessionId(generateSessionId())
     setMessages([])
     setViewingSession(null)
@@ -87,7 +119,6 @@ export function PlaygroundPage() {
 
   return (
     <div className="flex h-[calc(100vh-6rem)] gap-0">
-      {/* History side panel */}
       {showHistory && (
         <div className="w-64 shrink-0 border-r border-border flex flex-col bg-card/50">
           <div className="flex items-center justify-between px-3 py-3 border-b border-border">
@@ -100,7 +131,7 @@ export function PlaygroundPage() {
             {historySessions.length === 0 ? (
               <p className="text-xs text-muted-foreground text-center mt-6">No past sessions</p>
             ) : (
-              historySessions.map(id => (
+              historySessions.map((id) => (
                 <div
                   key={id}
                   className={cn(
@@ -125,51 +156,29 @@ export function PlaygroundPage() {
         </div>
       )}
 
-      {/* Main area */}
       <div className="flex-1 flex flex-col gap-3 p-4 min-w-0">
-        {/* Top bar */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => setShowHistory(h => !h)}
-            title="Toggle history"
-          >
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowHistory((h) => !h)} title="Toggle history">
             <History className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs gap-1"
-            onClick={startNewSession}
-          >
+          <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={startNewSession}>
             <Plus className="h-3 w-3" /> New
           </Button>
-
           <code className="font-mono text-[10px] text-muted-foreground truncate max-w-[180px]">{sessionId}</code>
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard.writeText(sessionId); toast({ title: 'Copied', variant: 'success' }) }}>
+          <Button variant="ghost" size="icon" className="h-6 w-6"
+            onClick={() => { navigator.clipboard.writeText(sessionId); toast({ title: 'Copied', variant: 'success' }) }}>
             <Copy className="h-3 w-3" />
           </Button>
-
           <div className="ml-auto">
-            <Select
-              value={selectedWorkspace}
-              onChange={(e) => setSelectedWorkspace(e.target.value)}
-              className="h-7 text-xs w-44"
-            >
+            <Select value={selectedWorkspace} onChange={(e) => setSelectedWorkspace(e.target.value)} className="h-7 text-xs w-44">
               <option value="">No workspace (all agents)</option>
-              {workspaces.map(w => (
-                <option key={w.name} value={w.name}>{w.display_name}</option>
-              ))}
+              {workspaces.map((w) => (<option key={w.name} value={w.name}>{w.display_name}</option>))}
             </Select>
           </div>
         </div>
 
-        {/* Chat / History viewer */}
         <Card className="flex-1 flex flex-col overflow-hidden">
           {viewingSession ? (
-            /* Viewing a past session */
             <>
               <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
                 <div className="flex items-center gap-2">
@@ -188,25 +197,22 @@ export function PlaygroundPage() {
                 ) : historyData?.history.length === 0 ? (
                   <p className="text-center text-sm text-muted-foreground mt-8">No messages in this session.</p>
                 ) : (
-                  historyData?.history.map((turn, i) => (
-                    <MessageBubble key={i} turn={turn} />
-                  ))
+                  historyData?.history.map((turn, i) => (<MessageBubble key={i} turn={turn} />))
                 )}
               </CardContent>
             </>
           ) : (
-            /* Active chat */
             <>
               <CardContent className="flex-1 overflow-y-auto p-4 space-y-4">
                 {messages.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
                     <div className="grid grid-cols-2 gap-2 max-w-md">
                       {[
-                        'Write a Python script that reads a CSV and produces a summary report',
-                        'Research the top 5 open-source LLM inference frameworks and compare them',
-                        'Analyze this data and identify key trends',
-                        'Create a detailed plan for building a REST API with authentication',
-                      ].map(example => (
+                        'What is the current UTC time?',
+                        'Fetch https://httpbin.org/json and summarize it',
+                        'Query https://httpbin.org/get?test=hello and explain',
+                        'What time is it and what is the IP from httpbin.org/ip?',
+                      ].map((example) => (
                         <button
                           key={example}
                           className="text-left rounded-lg border border-border p-3 text-xs hover:bg-accent transition-colors"
@@ -216,7 +222,7 @@ export function PlaygroundPage() {
                         </button>
                       ))}
                     </div>
-                    <p className="text-xs">Try one of these examples or type your own goal below.</p>
+                    <p className="text-xs">Try an example or type your own goal below.</p>
                   </div>
                 ) : (
                   messages.map((msg, i) => <ChatMessage key={i} message={msg} />)
@@ -224,7 +230,7 @@ export function PlaygroundPage() {
                 <div ref={messagesEndRef} />
               </CardContent>
               <div className="p-4 border-t border-border">
-                <ChatInput onSend={handleSend} disabled={invoke.isPending} />
+                <ChatInput onSend={handleSend} disabled={messages.some((m) => m.isStreaming)} />
               </div>
             </>
           )}

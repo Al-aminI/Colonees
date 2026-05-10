@@ -79,9 +79,7 @@ class DynamicSpecialistAgent(BaseSpecialistAgent):
                             "Colonee '%s': failed to get tools from MCP server '%s': %s",
                             defn.name, server_name, exc,
                         )
-            else:
-                # No explicit server list — use global specialist-type scoping
-                tools.extend(self.mcp_manager.get_tools_for_specialist(self._specialist_type))
+            # Note: empty mcp_servers list means NO MCP servers — no fallback to global scoping
 
         # --- Connector tools (OpenAPI / Repo) ---
         tools.extend(self._load_connector_tools())

@@ -256,6 +256,10 @@ class ColoneesPlatform:
         if self.session_manager:
             await self.session_manager.shutdown()
 
+        # Close all active MCP client sessions
+        if self.agent_manager and self.agent_manager.mcp:
+            self.agent_manager.mcp.close_all()
+
         self.active_sessions.clear()
         self.is_initialized = False
         logger.info("Colonees Platform shutdown complete")

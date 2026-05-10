@@ -1,4 +1,7 @@
-import { cn, formatResult } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { Bot, User } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { HistoryTurn } from '@/types'
 
 interface MessageBubbleProps {
@@ -10,26 +13,41 @@ export function MessageBubble({ turn }: MessageBubbleProps) {
   const isError = turn.role === 'error'
 
   return (
-    <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
+    <div className={cn('flex gap-3', isUser && 'flex-row-reverse')}>
       <div
         className={cn(
-          'max-w-[80%] rounded-lg px-4 py-2.5 text-sm',
+          'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
           isUser && 'bg-primary text-primary-foreground',
-          !isUser && !isError && 'bg-card border border-border',
-          isError && 'bg-destructive/10 border border-destructive/30 text-destructive',
+          isError && 'bg-destructive/20 text-destructive',
+          !isUser && !isError && 'bg-gradient-to-br from-indigo-500 to-purple-500 text-white',
         )}
       >
-        {turn.role !== 'user' && (
-          <p className="text-[10px] font-medium uppercase tracking-wide mb-1 opacity-60">
-            {turn.role}
-          </p>
+        {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+      </div>
+
+      <div
+        className={cn(
+          'max-w-[85%] min-w-0 text-sm',
+          isUser && 'flex flex-col items-end',
         )}
-        {typeof turn.content === 'string' && !turn.content.startsWith('{') && !turn.content.startsWith('[') ? (
-          <p className="whitespace-pre-wrap">{turn.content}</p>
+      >
+        {isUser ? (
+          <div className="rounded-2xl rounded-tr-md bg-primary text-primary-foreground px-4 py-2.5">
+            <p className="whitespace-pre-wrap">{turn.content}</p>
+          </div>
         ) : (
-          <pre className="text-xs overflow-x-auto whitespace-pre-wrap">
-            {formatResult(turn.content)}
-          </pre>
+          <div className={cn(
+            'rounded-2xl rounded-tl-md px-4 py-3',
+            isError
+              ? 'bg-destructive/10 border border-destructive/30 text-destructive'
+              : 'bg-card border border-border',
+          )}>
+            <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-code:text-foreground prose-pre:bg-muted prose-pre:border prose-pre:border-border prose-a:text-primary">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {turn.content}
+              </ReactMarkdown>
+            </div>
+          </div>
         )}
       </div>
     </div>

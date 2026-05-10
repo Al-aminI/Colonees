@@ -102,7 +102,9 @@ class SpecialistAgentFactory:
         """Create specialist agent of specified type."""
 
         if not agent_id:
-            agent_id = f"{specialist_type}_{specialization}_specialist_{hash(str(session_manager))}"
+            safe_spec = specialist_type.replace("/", "_").replace(" ", "_")[:40]
+            safe_specialization = specialization.replace("/", "_").replace(" ", "_").replace(":", "_")[:40]
+            agent_id = f"{safe_spec}_{safe_specialization}_specialist_{hash(str(session_manager))}"
 
         # 1. Try ColoneeRegistry (user-defined + built-in definitions)
         if colonee_registry is not None:

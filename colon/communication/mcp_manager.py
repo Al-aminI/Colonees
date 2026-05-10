@@ -54,6 +54,7 @@ class MCPManager:
 
     def __init__(self):
         self._servers: Dict[str, MCPServerConfig] = {}
+        self._active_clients: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Server registration
@@ -152,29 +153,33 @@ class MCPManager:
         Connect to a registered MCP server, retrieve its tools, and return
         them as Strands-compatible tool objects.
 
-        IMPORTANT: This opens a connection, fetches tools, and closes it.
-        The returned tools are valid for the lifetime of the MCPClient
-        context — pass them to Agent(tools=[...]) inside a `with` block
-        if you need the connection to stay open during agent execution.
-
-        For long-lived agents, use get_client_context() instead.
-
-        Args:
-            server_name: Name as registered with add_server().
-
-        Returns:
-            List of Strands tool objects ready for Agent(tools=[...]).
+        The MCP client session is kept alive so tools remain callable.
+        Call close_all() on platform shutdown to clean up.
         """
         if server_name not in self._servers:
             raise KeyError(f"MCP server '{server_name}' not registered. Known: {list(self._servers)}")
 
         cfg = self._servers[server_name]
-        client = self._build_client(cfg)
 
-        with client:
-            tools = client.list_tools_sync()
-            logger.info("Retrieved %d tools from MCP server '%s'", len(tools), server_name)
-            return tools
+        if server_name not in self._active_clients:
+            client = self._build_client(cfg)
+            client.__enter__()
+            self._active_clients[server_name] = client
+            logger.info("MCP client session opened: '%s'", server_name)
+
+        client = self._active_clients[server_name]
+        tools = client.list_tools_sync()
+        return tools
+
+    def close_all(self) -> None:
+        """Close all active MCP client sessions. Call on platform shutdown."""
+        for name, client in list(self._active_clients.items()):
+            try:
+                client.__exit__(None, None, None)
+                logger.info("MCP client session closed: '%s'", name)
+            except Exception as e:
+                logger.warning("Error closing MCP client '%s': %s", name, e)
+        self._active_clients.clear()
 
     def get_tools_for_specialist(self, specialist_type: str) -> List[Any]:
         """

@@ -13,7 +13,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
@@ -326,6 +326,146 @@ async def invoke(body: InvokeRequest):
     except Exception as e:
         logger.error("Invoke failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/invoke/stream", tags=["Agent Swarm"])
+async def invoke_stream(body: InvokeRequest):
+    """
+    Submit a goal and stream agent events in real-time via Server-Sent Events.
+
+    Events emitted:
+      - routing: which colonee was selected
+      - text: response text chunks as they generate
+      - tool_use: tool being called (name + input streaming)
+      - tool_result: tool execution result
+      - done: final completion with metadata
+    """
+    import json as _json
+    import asyncio as _asyncio
+
+    async def event_stream():
+        try:
+            platform = await get_platform()
+
+            colonees = body.colonees
+            if colonees is None and body.workspace:
+                ws_mgr = get_workspace_manager()
+                ws = ws_mgr.get(body.workspace)
+                if ws is None:
+                    msg = f"Workspace '{body.workspace}' not found."
+                    yield f"data: {_json.dumps({'type': 'error', 'message': msg})}\n\n"
+                    return
+                if not ws.enabled:
+                    msg = f"Workspace '{body.workspace}' is disabled."
+                    yield f"data: {_json.dumps({'type': 'error', 'message': msg})}\n\n"
+                    return
+                colonees = ws.colonees or None
+
+            # Resolve best colonee
+            supervisor = platform.supervisor_agent
+            context = {"colonees": colonees, "workspace": body.workspace}
+            available = supervisor._resolve_available_colonees(context)
+            if not available:
+                yield f"data: {_json.dumps({'type': 'error', 'message': 'No colonees available.'})}\n\n"
+                return
+
+            best_name = supervisor._select_best_colonee(body.goal, available)
+
+            # Emit routing event
+            yield f"data: {_json.dumps({'type': 'routing', 'colonee': best_name, 'workspace': body.workspace or 'none'})}\n\n"
+
+            # Create session and spawn agent
+            session_result = await platform.session_manager.create_session(
+                context={'agent_type': best_name, 'workspace': body.workspace, 'goal': body.goal}
+            )
+            specialist_session_id = (
+                session_result[0] if isinstance(session_result, tuple) else session_result
+            )
+
+            agent = await platform.agent_manager.create_specialist_agent(
+                specialist_type=best_name,
+                specialization=body.goal[:80],
+                session_id=specialist_session_id,
+                workspace=body.workspace,
+            )
+
+            yield f"data: {_json.dumps({'type': 'routing', 'colonee': best_name, 'workspace': body.workspace or 'none', 'agent_id': agent.agent_id, 'phase': 'spawned'})}\n\n"
+
+            # Stream agent events
+            try:
+                async for event in agent.agent.stream_async(body.goal):
+                    evt_type = None
+                    payload = {}
+
+                    if 'data' in event:
+                        evt_type = 'text'
+                        payload['content'] = str(event.get('data', ''))
+                    elif 'current_tool_use' in event:
+                        tu = event['current_tool_use']
+                        if isinstance(tu, dict):
+                            evt_type = 'tool_use'
+                            payload['tool_name'] = tu.get('name', 'unknown')
+                            payload['tool_id'] = tu.get('toolUseId', '')
+                            inp = tu.get('input', {})
+                            # input can be a dict or a JSON string being built
+                            tool_input = None
+                            if isinstance(inp, dict):
+                                ti = inp.get('tool_input', {})
+                                if isinstance(ti, dict) and ti:
+                                    tool_input = _json.dumps(ti)
+                            elif isinstance(inp, str) and inp.strip() and inp != '{}':
+                                try:
+                                    parsed = _json.loads(inp)
+                                    if isinstance(parsed, dict):
+                                        ti = parsed.get('tool_input', {})
+                                        if isinstance(ti, dict) and ti:
+                                            tool_input = _json.dumps(ti)
+                                except (_json.JSONDecodeError, ValueError):
+                                    pass  # incomplete JSON — skip
+                            if tool_input is not None:
+                                payload['input'] = tool_input
+                    elif 'result' in event:
+                        evt_type = 'done'
+                        result = event['result']
+                        if hasattr(result, 'text'):
+                            payload['response'] = str(result.text)
+                        elif hasattr(result, 'content'):
+                            payload['response'] = str(result.content)
+                        else:
+                            payload['response'] = str(result)
+                    elif 'tool_result' in event:
+                        evt_type = 'tool_result'
+                        tr = event['tool_result']
+                        if isinstance(tr, dict):
+                            payload['tool_name'] = tr.get('name', '')
+                            payload['output'] = str(tr.get('result', tr))[:2000]
+
+                    if evt_type:
+                        yield f"data: {_json.dumps({'type': evt_type, **payload}, default=str)}\n\n"
+
+            except Exception as e:
+                yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+            finally:
+                if specialist_session_id:
+                    try:
+                        await platform.session_manager.cleanup_session(specialist_session_id)
+                    except:
+                        pass
+
+        except Exception as e:
+            logger.error("Stream invoke failed: %s", e)
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/agents/invoke", tags=["Agent Swarm"])
